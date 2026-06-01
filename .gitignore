@@ -1,0 +1,19 @@
+# Credenciales de Google (¡NUNCA subir!)
+credenciales.json
+
+# Configuración local (puede tener rutas absolutas)
+scheduler_config.json
+
+# Archivos generados por PyInstaller
+build/
+dist/
+*.spec
+
+# Logs y caché de Python
+*.log
+__pycache__/
+*.pyc
+
+# Chrome portable y chromedriver (se descargan solos)
+chrome-portable/
+chromedriver-portable/
