@@ -518,7 +518,21 @@ def run_gui():
     scheduler_process = None
     scheduler_status_var = tk.StringVar(value="●  Detenido")
     config = load_config()
+    
+# ------------------------------------------------------------
+    # NUEVO: Verificar bloqueo remoto al iniciar la interfaz
+    # ------------------------------------------------------------
+    from remote_lock import verificar_bloqueo
+    if verificar_bloqueo():
+        messagebox.showwarning(
+            "Aplicación bloqueada",
+            "⚠️  Esta aplicación ha sido bloqueada por el administrador.\n\n"
+            "Contacte al soporte para más información."
+        )
+    # ------------------------------------------------------------
 
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill='both', expand=True, padx=10, pady=10)
     notebook = ttk.Notebook(root)
     notebook.pack(fill='both', expand=True, padx=10, pady=10)
 
