@@ -4,7 +4,7 @@ import logging
 logger = logging.getLogger("main")
 
 # ⚠️ CAMBIA esta URL por la de tu archivo bloqueo.json en GitHub
-BLOQUEO_URL = "https://raw.githubusercontent.com/tu_usuario/tu_repo/main/bloqueo.json"
+BLOQUEO_URL = "https://raw.githubusercontent.com/AndresJu02/Saldos-sheduler/refs/heads/main/bloqueo.json"
 
 def verificar_bloqueo() -> bool:
     """
