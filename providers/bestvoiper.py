@@ -6,7 +6,7 @@ from selenium.webdriver.support import expected_conditions as EC
 
 class BestVoIPerProvider(BaseProvider):
     name = "BestVoIPer"
-    sheet_row = 8
+    sheet_row = 7
     sheet_col = 2
 
     config_fields = [
@@ -56,7 +56,7 @@ class BestVoIPerProvider(BaseProvider):
                         numero_str = numero_str.replace(',', '.')
                 # Ahora tenemos un número con punto decimal (si corresponde)
                 # Mostramos el número exactamente como está, SIN redondear
-                formatted = f"$ {numero_str}"
+                formatted = f"$ {numero_str} COP"
             else:
                 formatted = raw
 

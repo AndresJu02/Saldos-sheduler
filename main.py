@@ -36,7 +36,7 @@ def setup_console():
         kernel32.AllocConsole()
     sys.stdout = open('CONOUT$', 'w')
     sys.stderr = open('CONOUT$', 'w')
-    sys.stdin = open('CONIN$', 'r')          # ← permite usar input()
+    sys.stdin = open('CONIN$', 'r')
 
 # ---------------------------------------------------------------------------
 # Rutas base (portable)
@@ -183,20 +183,17 @@ def cleanup_orphans():
         return
 
     current_pid = os.getpid()
-    # Ruta de la carpeta que contiene nuestro Chrome portable
-    chrome_portable_dir = str(CHROME_DIR.resolve()).lower()  # ej: C:\...\chrome-portable
+    chrome_portable_dir = str(CHROME_DIR.resolve()).lower()
 
     for proc in psutil.process_iter(['pid', 'name', 'exe']):
         try:
             name = (proc.info['name'] or '').lower()
             exe_path = (proc.info['exe'] or '').lower()
 
-            # Eliminar chromedriver (suele quedar huérfano)
             if 'chromedriver' in name:
                 if proc.info['pid'] != current_pid:
                     proc.kill()
                     logger.info(f"Limpieza: chromedriver (PID {proc.info['pid']}) terminado.")
-            # Eliminar chrome.exe solo si está dentro de la carpeta chrome-portable
             elif 'chrome' in name and chrome_portable_dir in exe_path:
                 if proc.info['pid'] != current_pid:
                     proc.kill()
@@ -214,7 +211,6 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 def get_robust_driver(chrome_exe: str, chromedriver_exe: str, headless: bool = True):
     opts = ChromeOptions()
     opts.binary_location = chrome_exe
-    # -------------------- Opciones exactas del script original --------------------
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument("--start-maximized")
     opts.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36")
@@ -228,12 +224,10 @@ def get_robust_driver(chrome_exe: str, chromedriver_exe: str, headless: bool = T
         opts.add_argument("--window-size=1920,1080")
         opts.add_argument("--disable-dev-shm-usage")
         opts.add_argument("--no-sandbox")
-    # Bypass HTTP inseguro
     opts.add_argument("--allow-running-insecure-content")
     opts.add_argument("--ignore-certificate-errors")
     opts.add_argument("--allow-insecure-localhost")
     opts.add_argument("--unsafely-treat-insecure-origin-as-secure=http://178.105.24.84,http://158.69.177.101,http://clientes.datavoice.com.co,http://45.226.115.82")
-    # ----------------------------------------------------------------------------
 
     service = Service(executable_path=chromedriver_exe)
     driver = Chrome(service=service, options=opts)
@@ -251,6 +245,9 @@ def load_config():
             for k, v in DEFAULT_CONFIG.items():
                 if k not in cfg:
                     cfg[k] = v
+            # Normalizar listas que deben ser strings
+            cfg["provider_order"] = [str(x).strip() for x in cfg.get("provider_order", [])]
+            cfg["enabled_providers"] = [str(x).strip() for x in cfg.get("enabled_providers", [])]
             return cfg
         except Exception:
             logger.warning("Error al leer configuración, usando valores por defecto.")
@@ -298,7 +295,6 @@ def get_all_providers():
             providers.append(p)
     return providers
 
-# Asegurar que el módulo compartido de proveedores se cargue
 import providers.vos_helpers
 
 # ---------------------------------------------------------------------------
@@ -306,6 +302,7 @@ import providers.vos_helpers
 # ---------------------------------------------------------------------------
 def sort_providers_by_order(providers: List, config: dict) -> List:
     order = config.get("provider_order", [])
+    order = [str(o).strip() for o in order]
     if not order:
         order = [p.name for p in providers]
         config["provider_order"] = order
@@ -336,10 +333,9 @@ def _get_launch_cmd(args: List[str]) -> List[str]:
         return [sys.executable, os.path.abspath(__file__)] + args
 
 # ---------------------------------------------------------------------------
-# Ciclo de consulta de saldos (con salida a terminal)
+# Ciclo de consulta de saldos
 # ---------------------------------------------------------------------------
 def run_balance_cycle(config: dict):
-    # Configurar salida UTF-8
     try:
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception:
@@ -350,10 +346,8 @@ def run_balance_cycle(config: dict):
         print(f"ERROR: Credenciales no encontradas en {cred_path}", flush=True)
         return
 
-    # Limpiar procesos huérfanos ANTES de crear nuevos drivers
     cleanup_orphans()
 
-    # Verificar bloqueo remoto
     if verificar_bloqueo():
         print("\n⚠️  APLICACIÓN BLOQUEADA POR EL ADMINISTRADOR.", flush=True)
         print("   Contacte al soporte para más información.\n", flush=True)
@@ -393,6 +387,12 @@ def run_balance_cycle(config: dict):
             key = field["key"]
             final_cfg[key] = prov_cfg.get(key, field.get("default", ""))
 
+        # --- Aplicar celda personalizada si existe en la configuración ---
+        if 'sheet_row' in prov_cfg:
+            provider.sheet_row = int(prov_cfg['sheet_row'])
+        if 'sheet_col' in prov_cfg:
+            provider.sheet_col = int(prov_cfg['sheet_col'])
+
         print(f"\nProcesando {provider.name}...", flush=True)
         try:
             success, msg = provider.get_balance(
@@ -417,16 +417,14 @@ def run_balance_cycle(config: dict):
     except Exception:
         pass
 
-    # Pausa hasta que el usuario cierre la ventana
-    if getattr(sys, 'frozen', False):
-        print("\nProceso finalizado. Puede cerrar esta ventana.", flush=True)
-        try:
-            input()   # Espera un Enter, pero la X también cierra
-        except (EOFError, OSError):
-            pass
+    print("\nProceso finalizado. Puede cerrar esta ventana.", flush=True)
+    try:
+        input()
+    except (EOFError, OSError):
+        pass
 
 # ---------------------------------------------------------------------------
-# Planificador (scheduler)
+# Planificador
 # ---------------------------------------------------------------------------
 def run_scheduler():
     config = load_config()
@@ -443,14 +441,12 @@ def run_scheduler():
         pass
 
     owner_id = f"{socket.gethostname()}_{uuid.uuid4().hex[:8]}"
-    # Control de horarios ya ejecutados hoy
     executed_today = set()
     current_date = datetime.now().date()
 
     logger.info("Scheduler iniciado.")
     while True:
         ahora = datetime.now()
-        # Reiniciar el registro diario si cambió el día
         if ahora.date() != current_date:
             executed_today.clear()
             current_date = ahora.date()
@@ -467,14 +463,11 @@ def run_scheduler():
             try:
                 h, m = map(int, hhmm.split(':'))
                 target = ahora.replace(hour=h, minute=m, second=0, microsecond=0)
-                # Verificar tolerancia
                 if abs((ahora - target).total_seconds()) > config['tolerancia_min'] * 60:
                     continue
-                # Si ya se ejecutó hoy, ignorar
                 if hhmm in executed_today:
                     continue
 
-                # Lock opcional en Sheets
                 if sh:
                     try:
                         lock_val = f"{owner_id}|{ahora.isoformat()}"
@@ -490,7 +483,6 @@ def run_scheduler():
                     _get_launch_cmd(['--balance']),
                     creationflags=subprocess.CREATE_NEW_CONSOLE
                 )
-                # Marcar como ejecutado hoy
                 executed_today.add(hhmm)
 
                 if sh:
@@ -503,6 +495,7 @@ def run_scheduler():
                 logger.error(f"Error en horario {hhmm}: {e}")
 
         time.sleep(config['sleep_interval'])
+
 # ---------------------------------------------------------------------------
 # Interfaz gráfica
 # ---------------------------------------------------------------------------
@@ -513,35 +506,331 @@ def run_gui():
 
     root = tk.Tk()
     root.title("Saldos Scheduler")
-    root.geometry("750x550")
+    root.geometry("835x600")
+    root.minsize(750, 500)
+    root.configure(bg="#f5f6fa")
+
+    # Centrar ventana
+    root.update_idletasks()
+    w = root.winfo_width()
+    h = root.winfo_height()
+    sw = root.winfo_screenwidth()
+    sh = root.winfo_screenheight()
+    x = (sw - w) // 2
+    y = (sh - h) // 2
+    root.geometry(f"+{x}+{y}")
+
+    # Estilo moderno
+    style = ttk.Style()
+    style.theme_use("clam")
+
+    BG = "#f5f6fa"
+    FG = "#2c3e50"
+    ACCENT = "#3498db"
+    ACCENT_DARK = "#2980b9"
+    WHITE = "#ffffff"
+
+    style.configure(".", background=BG, foreground=FG, font=("Segoe UI", 10))
+    style.configure("TFrame", background=BG)
+    style.configure("TLabel", background=BG, foreground=FG)
+    style.configure("TLabelframe", background=BG, foreground=FG, borderwidth=0)
+    style.configure("TLabelframe.Label", background=BG, foreground=FG, font=("Segoe UI", 11, "bold"))
+    style.configure("TNotebook", background=BG, borderwidth=0)
+    style.configure("TNotebook.Tab", background="#e0e0e0", foreground=FG, padding=[15, 6], font=("Segoe UI", 10))
+    style.map("TNotebook.Tab", background=[("selected", WHITE)], foreground=[("selected", ACCENT)])
+
+    style.configure("Accent.TButton", background=ACCENT, foreground=WHITE, borderwidth=0, padding=[15, 6])
+    style.map("Accent.TButton", background=[("active", ACCENT_DARK), ("disabled", "#bdc3c7")])
+
+    style.configure("TButton", background="#ecf0f1", foreground=FG, borderwidth=0, padding=[10, 5])
+    style.map("TButton", background=[("active", "#d5dbdb")])
+
+    style.configure("Treeview", background=WHITE, fieldbackground=WHITE, foreground=FG, rowheight=30, borderwidth=0)
+    style.configure("Treeview.Heading", background=BG, foreground=FG, font=("Segoe UI", 10, "bold"), borderwidth=0)
+    style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", WHITE)])
+
+    style.configure("TEntry", fieldbackground=WHITE, borderwidth=1, relief="solid")
 
     scheduler_process = None
-    scheduler_status_var = tk.StringVar(value="●  Detenido")
+    scheduler_status_var = tk.StringVar(value="⚫  Detenido")
     config = load_config()
-    
-# ------------------------------------------------------------
-    # NUEVO: Verificar bloqueo remoto al iniciar la interfaz
-    # ------------------------------------------------------------
-    from remote_lock import verificar_bloqueo
-    if verificar_bloqueo():
-        messagebox.showwarning(
-            "Aplicación bloqueada",
-            "⚠️  Esta aplicación ha sido bloqueada por el administrador.\n\n"
-            "Contacte al soporte para más información."
-        )
-    # ------------------------------------------------------------
 
-    notebook = ttk.Notebook(root)
-    notebook.pack(fill='both', expand=True, padx=10, pady=10)
-    notebook = ttk.Notebook(root)
-    notebook.pack(fill='both', expand=True, padx=10, pady=10)
+    def verificar_y_avisar():
+        if verificar_bloqueo():
+            messagebox.showwarning(
+                "Aplicación bloqueada",
+                "⚠️  Esta aplicación ha sido bloqueada por el administrador.\n\n"
+                "Contacte al soporte para más información."
+            )
+    root.after(150, verificar_y_avisar)
 
-    # ---------- Pestaña Proveedores ----------
+    # ====================== NOTEBOOK ======================
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True, padx=15, pady=(15, 5))
+
+    # ------------------------------------------------------------------
+    # 1. PESTAÑA PROVEEDORES (tabla + botones)
+    # ------------------------------------------------------------------
     tab_prov = ttk.Frame(notebook)
-    notebook.add(tab_prov, text="Proveedores")
+    notebook.add(tab_prov, text="   Proveedores   ")
 
-    cred_frame = ttk.LabelFrame(tab_prov, text="Archivo de credenciales (credenciales.json)")
-    cred_frame.pack(fill=tk.X, padx=5, pady=5)
+    main_frame = ttk.Frame(tab_prov)
+    main_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+    columns = ("Proveedor",)
+    tree = ttk.Treeview(main_frame, columns=columns, show="tree headings", selectmode="extended")
+    tree.heading("#0", text="Estado")
+    tree.heading("Proveedor", text="Proveedor")
+    tree.column("#0", width=60, anchor="center")
+    tree.column("Proveedor", width=250, anchor="w")
+    tree.pack(side="left", fill="both", expand=True)
+
+    scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=tree.yview)
+    scrollbar.pack(side="right", fill="y")
+    tree.configure(yscrollcommand=scrollbar.set)
+
+    btn_panel = ttk.Frame(main_frame)
+    btn_panel.pack(side="right", fill="y", padx=(15, 5))
+
+    def refresh_tree():
+        tree.delete(*tree.get_children())
+        providers = get_all_providers()
+        providers = sort_providers_by_order(providers, config)
+        enabled = [str(e).strip() for e in config.get("enabled_providers", [])]
+        for p in providers:
+            nombre_limpio = str(p.name).strip()
+            icon = "✓" if nombre_limpio in enabled else "✗"
+            tree.insert("", "end", text=icon, values=(nombre_limpio,))
+
+    refresh_tree()
+
+    def configurar_proveedor():
+        selecciones = tree.selection()
+        if not selecciones:
+            messagebox.showinfo("Seleccionar", "Seleccione un proveedor primero.")
+            return
+        sel = selecciones[0]
+        item = tree.item(sel)
+        nombre = str(item["values"][0]).strip()
+        providers = get_all_providers()
+        provider = next((p for p in providers if str(p.name).strip() == nombre), None)
+        if not provider:
+            return
+
+        win = tk.Toplevel(root)
+        win.title(f"Configurar {provider.name}")
+        win.geometry("400x350")
+        win.configure(bg=WHITE)
+        win.transient(root)
+        win.grab_set()
+        entries = {}
+        prov_cfg = config.get("providers_config", {}).get(provider.name, {})
+
+        for idx, field in enumerate(provider.config_fields):
+            ttk.Label(win, text=field["label"], font=("Segoe UI", 10)).grid(row=idx, column=0, sticky="w", padx=15, pady=8)
+            var = tk.StringVar(value=prov_cfg.get(field["key"], field.get("default", "")))
+            ttk.Entry(win, textvariable=var, width=30).grid(row=idx, column=1, padx=15, pady=8)
+            entries[field["key"]] = var
+
+        row_offset = len(provider.config_fields)
+        ttk.Label(win, text="Fila (Sheet Row)", font=("Segoe UI", 10)).grid(row=row_offset, column=0, sticky="w", padx=15, pady=8)
+        var_row = tk.StringVar(value=str(prov_cfg.get("sheet_row", provider.sheet_row)))
+        ttk.Entry(win, textvariable=var_row, width=10).grid(row=row_offset, column=1, padx=15, pady=8, sticky="w")
+        entries["sheet_row"] = var_row
+
+        ttk.Label(win, text="Columna (Sheet Col)", font=("Segoe UI", 10)).grid(row=row_offset+1, column=0, sticky="w", padx=15, pady=8)
+        var_col = tk.StringVar(value=str(prov_cfg.get("sheet_col", provider.sheet_col)))
+        ttk.Entry(win, textvariable=var_col, width=10).grid(row=row_offset+1, column=1, padx=15, pady=8, sticky="w")
+        entries["sheet_col"] = var_col
+
+        def guardar():
+            new_cfg = {}
+            for k, v in entries.items():
+                val = v.get()
+                if k in ("sheet_row", "sheet_col"):
+                    try:
+                        new_cfg[k] = int(val)
+                    except ValueError:
+                        new_cfg[k] = val
+                else:
+                    new_cfg[k] = val
+            config.setdefault("providers_config", {})[provider.name] = new_cfg
+            save_config(config)
+            win.destroy()
+
+        ttk.Button(win, text="Guardar", command=guardar, style="Accent.TButton").grid(
+            row=row_offset+2, column=1, pady=20, sticky="e", padx=15
+        )
+
+    def toggle_proveedor():
+        selecciones = tree.selection()
+        if not selecciones:
+            messagebox.showinfo("Seleccionar", "Seleccione al menos un proveedor.")
+            return
+
+        nombres_seleccionados = []
+        for sel in selecciones:
+            try:
+                item = tree.item(sel)
+                nombre = str(item["values"][0]).strip()
+                nombres_seleccionados.append(nombre)
+            except Exception:
+                continue
+
+        if not nombres_seleccionados:
+            return
+
+        enabled = [str(e).strip() for e in config.get("enabled_providers", [])]
+        accion_habilitar = nombres_seleccionados[0] not in enabled
+
+        for nombre in nombres_seleccionados:
+            if accion_habilitar:
+                if nombre not in enabled:
+                    enabled.append(nombre)
+            else:
+                if nombre in enabled:
+                    enabled.remove(nombre)
+
+        config["enabled_providers"] = enabled
+        save_config(config)
+        refresh_tree()
+
+        for nombre in nombres_seleccionados:
+            for child in tree.get_children():
+                if str(tree.item(child)["values"][0]).strip() == nombre:
+                    tree.selection_add(child)
+
+    def mover_arriba():
+        selecciones = tree.selection()
+        if not selecciones:
+            return
+        sel = selecciones[0]
+        item = tree.item(sel)
+        nombre = str(item["values"][0]).strip()
+        order = config.get("provider_order", [])
+        order = [str(o).strip() for o in order]
+
+        if nombre not in order:
+            order.append(nombre)
+            config["provider_order"] = order
+            save_config(config)
+            refresh_tree()
+            order = config.get("provider_order", [])
+            order = [str(o).strip() for o in order]
+
+        if nombre not in order:
+            return
+
+        idx = order.index(nombre)
+        if idx > 0:
+            order[idx], order[idx-1] = order[idx-1], order[idx]
+            config["provider_order"] = order
+            save_config(config)
+            refresh_tree()
+            for child in tree.get_children():
+                if str(tree.item(child)["values"][0]).strip() == nombre:
+                    tree.selection_set(child)
+                    tree.focus(child)
+                    break
+
+    def mover_abajo():
+        selecciones = tree.selection()
+        if not selecciones:
+            return
+        sel = selecciones[0]
+        item = tree.item(sel)
+        nombre = str(item["values"][0]).strip()
+        order = config.get("provider_order", [])
+        order = [str(o).strip() for o in order]
+
+        if nombre not in order:
+            order.append(nombre)
+            config["provider_order"] = order
+            save_config(config)
+            refresh_tree()
+            order = config.get("provider_order", [])
+            order = [str(o).strip() for o in order]
+
+        if nombre not in order:
+            return
+
+        idx = order.index(nombre)
+        if idx < len(order) - 1:
+            order[idx], order[idx+1] = order[idx+1], order[idx]
+            config["provider_order"] = order
+            save_config(config)
+            refresh_tree()
+            for child in tree.get_children():
+                if str(tree.item(child)["values"][0]).strip() == nombre:
+                    tree.selection_set(child)
+                    tree.focus(child)
+                    break
+
+    def agregar_proveedor():
+        messagebox.showinfo(
+            "Agregar proveedor",
+            "Para añadir un nuevo proveedor:\n\n"
+            "1. Coloca su archivo .py en la carpeta 'providers' junto al ejecutable.\n"
+            "2. La clase debe heredar de BaseProvider.\n"
+            "3. Reinicia la aplicación.\n\n"
+            "Puedes copiar uno existente como plantilla."
+        )
+
+    ttk.Button(btn_panel, text="⚙  Configurar", command=configurar_proveedor, style="Accent.TButton", width=20).pack(pady=4, fill="x")
+    ttk.Button(btn_panel, text="↻  Habilitar / Deshab.", command=toggle_proveedor, width=20).pack(pady=4, fill="x")
+    ttk.Button(btn_panel, text="＋  Agregar proveedor", command=agregar_proveedor, width=20).pack(pady=4, fill="x")
+    ttk.Separator(btn_panel, orient="horizontal").pack(fill="x", pady=10)
+    ttk.Label(btn_panel, text="Orden:", font=("Segoe UI", 10, "bold")).pack()
+    ttk.Button(btn_panel, text="↑  Subir", command=mover_arriba, width=20).pack(pady=2, fill="x")
+    ttk.Button(btn_panel, text="↓  Bajar", command=mover_abajo, width=20).pack(pady=2, fill="x")
+
+    # ------------------------------------------------------------------
+    # 2. PESTAÑA HORARIOS
+    # ------------------------------------------------------------------
+    tab_hor = ttk.Frame(notebook)
+    notebook.add(tab_hor, text="   Horarios   ")
+
+    hor_frame = ttk.LabelFrame(tab_hor, text="⏰  Configuración de horarios", padding=20)
+    hor_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+    ttk.Label(hor_frame, text="Lunes a Viernes:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
+    entry_lv = ttk.Entry(hor_frame, width=50)
+    entry_lv.insert(0, ",".join(config["horarios_lun_vie"]))
+    entry_lv.grid(row=0, column=1, padx=15, pady=5)
+
+    ttk.Label(hor_frame, text="Sábados:", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
+    entry_sab = ttk.Entry(hor_frame, width=50)
+    entry_sab.insert(0, ",".join(config["horarios_sabado"]))
+    entry_sab.grid(row=1, column=1, padx=15, pady=5)
+
+    ttk.Label(hor_frame, text="Tolerancia (min):", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=5)
+    entry_tol = ttk.Entry(hor_frame, width=10)
+    entry_tol.insert(0, str(config["tolerancia_min"]))
+    entry_tol.grid(row=2, column=1, padx=15, pady=5, sticky="w")
+
+    def guardar_horarios():
+        config["horarios_lun_vie"] = [h.strip() for h in entry_lv.get().split(",") if h.strip()]
+        config["horarios_sabado"] = [h.strip() for h in entry_sab.get().split(",") if h.strip()]
+        try:
+            config["tolerancia_min"] = float(entry_tol.get())
+        except ValueError:
+            messagebox.showerror("Error", "La tolerancia debe ser un número.")
+            return
+        save_config(config)
+        messagebox.showinfo("Guardado", "Horarios actualizados.")
+
+    ttk.Button(hor_frame, text="💾  Guardar Horarios", command=guardar_horarios, style="Accent.TButton").grid(
+        row=3, column=1, pady=20, sticky="e"
+    )
+
+    # ------------------------------------------------------------------
+    # 3. PESTAÑA CONFIGURACIÓN (credenciales + URL de Sheets)
+    # ------------------------------------------------------------------
+    tab_config = ttk.Frame(notebook)
+    notebook.add(tab_config, text="   Configuración   ")
+
+    cred_frame = ttk.LabelFrame(tab_config, text="🔑  Archivo de credenciales", padding=15)
+    cred_frame.pack(fill="x", padx=10, pady=(15, 10))
 
     cred_path_var = tk.StringVar(value=config.get("credentials_path", ""))
 
@@ -559,6 +848,7 @@ def run_gui():
         win = tk.Toplevel(root)
         win.title("Cómo obtener credenciales.json")
         win.geometry("550x500")
+        win.configure(bg=WHITE)
         texto = (
             "1. Ve a: https://console.cloud.google.com/\n"
             "2. Inicia sesión con tu cuenta de Google.\n"
@@ -578,164 +868,37 @@ def run_gui():
             "14. Se descargará un archivo .json. Renómbralo a 'credenciales.json'.\n\n"
             "Luego, en esta aplicación, selecciona ese archivo con el botón 'Examinar'."
         )
-        lbl = ttk.Label(win, text=texto, justify=tk.LEFT, wraplength=500)
-        lbl.pack(padx=10, pady=10)
+        lbl = ttk.Label(win, text=texto, justify="left", wraplength=500)
+        lbl.pack(padx=15, pady=15)
+        ttk.Button(win, text="Abrir Google Cloud Console", command=lambda: webbrowser.open("https://console.cloud.google.com/")).pack(pady=5)
+        ttk.Button(win, text="Cerrar", command=win.destroy).pack(pady=10)
 
-        def abrir_consola():
-            webbrowser.open("https://console.cloud.google.com/")
-        ttk.Button(win, text="Abrir Google Cloud Console", command=abrir_consola).pack(pady=5)
-        ttk.Button(win, text="Cerrar", command=win.destroy).pack(pady=5)
+    row_cred = ttk.Frame(cred_frame)
+    row_cred.pack(fill="x")
+    ttk.Label(row_cred, text="Ruta:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
+    ttk.Entry(row_cred, textvariable=cred_path_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
+    ttk.Button(row_cred, text="Examinar", command=seleccionar_credenciales, style="Accent.TButton").pack(side="left", padx=3)
+    ttk.Button(row_cred, text="Ayuda", command=ayuda_credenciales).pack(side="left", padx=3)
 
-    row_frame = ttk.Frame(cred_frame)
-    row_frame.pack(fill=tk.X, padx=5, pady=5)
-    ttk.Label(row_frame, text="Ruta:").pack(side=tk.LEFT)
-    entry_cred = ttk.Entry(row_frame, textvariable=cred_path_var, width=50)
-    entry_cred.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-    ttk.Button(row_frame, text="Examinar", command=seleccionar_credenciales).pack(side=tk.LEFT, padx=2)
-    ttk.Button(row_frame, text="Ayuda", command=ayuda_credenciales).pack(side=tk.LEFT, padx=2)
+    url_frame = ttk.LabelFrame(tab_config, text="🌐  URL de Google Sheets", padding=15)
+    url_frame.pack(fill="x", padx=10, pady=(0, 10))
 
-    listbox = tk.Listbox(tab_prov, selectmode=tk.SINGLE, width=40)
-    listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+    sheet_url_var = tk.StringVar(value=config.get("google_sheet_url", ""))
 
-    btn_frame = ttk.Frame(tab_prov)
-    btn_frame.pack(side=tk.RIGHT, fill=tk.Y)
-
-    def refresh_list():
-        listbox.delete(0, tk.END)
-        providers = get_all_providers()
-        providers = sort_providers_by_order(providers, config)
-        enabled = config.get("enabled_providers", [])
-        for p in providers:
-            mark = "✓" if p.name in enabled else "✗"
-            listbox.insert(tk.END, f"{mark} {p.name}")
-
-    refresh_list()
-
-    def configurar_proveedor():
-        sel = listbox.curselection()
-        if not sel:
-            return
-        providers = get_all_providers()
-        providers = sort_providers_by_order(providers, config)
-        provider = providers[sel[0]]
-
-        win = tk.Toplevel(root)
-        win.title(f"Configurar {provider.name}")
-        entries = {}
-        row = 0
-        prov_cfg = config.get("providers_config", {}).get(provider.name, {})
-        for field in provider.config_fields:
-            ttk.Label(win, text=field["label"]).grid(row=row, column=0, sticky='w', padx=5, pady=2)
-            var = tk.StringVar(value=prov_cfg.get(field["key"], field.get("default", "")))
-            ttk.Entry(win, textvariable=var, width=30).grid(row=row, column=1, padx=5, pady=2)
-            entries[field["key"]] = var
-            row += 1
-
-        def guardar():
-            new_cfg = {k: v.get() for k, v in entries.items()}
-            config.setdefault("providers_config", {})[provider.name] = new_cfg
-            save_config(config)
-            win.destroy()
-
-        ttk.Button(win, text="Guardar", command=guardar).grid(row=row, column=1, pady=10, sticky='e')
-
-    def toggle_proveedor():
-        sel = listbox.curselection()
-        if not sel:
-            return
-        providers = get_all_providers()
-        providers = sort_providers_by_order(providers, config)
-        name = providers[sel[0]].name
-        enabled = config.get("enabled_providers", [])
-        if name in enabled:
-            enabled.remove(name)
-        else:
-            enabled.append(name)
-        config["enabled_providers"] = enabled
+    def guardar_url():
+        config["google_sheet_url"] = sheet_url_var.get().strip()
         save_config(config)
-        refresh_list()
+        messagebox.showinfo("Guardado", "URL de Google Sheets actualizada.")
 
-    def agregar_proveedor():
-        messagebox.showinfo(
-            "Agregar proveedor",
-            "Para añadir un nuevo proveedor:\n\n"
-            "1. Coloca su archivo .py en la carpeta 'providers' junto al ejecutable.\n"
-            "2. La clase debe heredar de BaseProvider.\n"
-            "3. Reinicia la aplicación.\n\n"
-            "Puedes copiar uno existente como plantilla."
-        )
+    row_url = ttk.Frame(url_frame)
+    row_url.pack(fill="x")
+    ttk.Label(row_url, text="URL:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
+    ttk.Entry(row_url, textvariable=sheet_url_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
+    ttk.Button(row_url, text="Guardar URL", command=guardar_url, style="Accent.TButton").pack(side="left", padx=3)
 
-    def mover_arriba():
-        sel = listbox.curselection()
-        if not sel or sel[0] == 0:
-            return
-        idx = sel[0]
-        order = config.get("provider_order", [])
-        if idx >= len(order):
-            return
-        order[idx], order[idx-1] = order[idx-1], order[idx]
-        config["provider_order"] = order
-        save_config(config)
-        refresh_list()
-        listbox.selection_set(idx-1)
-
-    def mover_abajo():
-        sel = listbox.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        order = config.get("provider_order", [])
-        if idx >= len(order) - 1:
-            return
-        order[idx], order[idx+1] = order[idx+1], order[idx]
-        config["provider_order"] = order
-        save_config(config)
-        refresh_list()
-        listbox.selection_set(idx+1)
-
-    ttk.Button(btn_frame, text="Configurar", command=configurar_proveedor).pack(pady=5, fill=tk.X)
-    ttk.Button(btn_frame, text="Habilitar/Deshab.", command=toggle_proveedor).pack(pady=5, fill=tk.X)
-    ttk.Button(btn_frame, text="Agregar proveedor", command=agregar_proveedor).pack(pady=5, fill=tk.X)
-    ttk.Separator(btn_frame, orient='horizontal').pack(pady=10, fill=tk.X)
-    ttk.Label(btn_frame, text="Orden:").pack()
-    ttk.Button(btn_frame, text="Subir ↑", command=mover_arriba).pack(pady=2, fill=tk.X)
-    ttk.Button(btn_frame, text="Bajar ↓", command=mover_abajo).pack(pady=2, fill=tk.X)
-
-    # ---------- Pestaña Horarios ----------
-    tab_hor = ttk.Frame(notebook)
-    notebook.add(tab_hor, text="Horarios")
-
-    ttk.Label(tab_hor, text="Lunes a Viernes (separados por coma):").grid(row=0, column=0, sticky='w', padx=5, pady=5)
-    entry_lv = ttk.Entry(tab_hor, width=50)
-    entry_lv.insert(0, ",".join(config['horarios_lun_vie']))
-    entry_lv.grid(row=0, column=1, padx=5, pady=5)
-
-    ttk.Label(tab_hor, text="Sábados:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
-    entry_sab = ttk.Entry(tab_hor, width=50)
-    entry_sab.insert(0, ",".join(config['horarios_sabado']))
-    entry_sab.grid(row=1, column=1, padx=5, pady=5)
-
-    ttk.Label(tab_hor, text="Tolerancia (min):").grid(row=2, column=0, sticky='w', padx=5, pady=5)
-    entry_tol = ttk.Entry(tab_hor, width=10)
-    entry_tol.insert(0, str(config['tolerancia_min']))
-    entry_tol.grid(row=2, column=1, sticky='w', padx=5, pady=5)
-
-    def guardar_horarios():
-        config['horarios_lun_vie'] = [h.strip() for h in entry_lv.get().split(',') if h.strip()]
-        config['horarios_sabado'] = [h.strip() for h in entry_sab.get().split(',') if h.strip()]
-        try:
-            config['tolerancia_min'] = float(entry_tol.get())
-        except ValueError:
-            messagebox.showerror("Error", "La tolerancia debe ser un número.")
-            return
-        save_config(config)
-        messagebox.showinfo("Guardado", "Horarios actualizados.")
-
-    ttk.Button(tab_hor, text="Guardar Horarios", command=guardar_horarios).grid(row=3, column=1, pady=10, sticky='e')
-
-    # ---------- Botones inferiores ----------
+    # ====================== BARRA INFERIOR ======================
     bottom = ttk.Frame(root)
-    bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+    bottom.pack(side="bottom", fill="x", padx=15, pady=(5, 15))
 
     def check_scheduler_status():
         nonlocal scheduler_process
@@ -745,11 +908,11 @@ def run_gui():
                 root.after(2000, check_scheduler_status)
             else:
                 scheduler_process = None
-                scheduler_status_var.set("●  Detenido")
+                scheduler_status_var.set("⚫  Detenido")
                 btn_iniciar.config(state=tk.NORMAL)
                 btn_detener.config(state=tk.DISABLED)
         else:
-            scheduler_status_var.set("●  Detenido")
+            scheduler_status_var.set("⚫  Detenido")
 
     def iniciar_scheduler():
         nonlocal scheduler_process
@@ -764,7 +927,7 @@ def run_gui():
             _get_launch_cmd(['--scheduler']),
             creationflags=subprocess.CREATE_NO_WINDOW
         )
-        scheduler_status_var.set("●  En ejecución (esperando horarios)")
+        scheduler_status_var.set("🟢  En ejecución (esperando horarios)")
         btn_iniciar.config(state=tk.DISABLED)
         btn_detener.config(state=tk.NORMAL)
         messagebox.showinfo("Scheduler", "Scheduler iniciado en segundo plano.\nPuedes seguir usando la interfaz.")
@@ -783,7 +946,7 @@ def run_gui():
             except Exception:
                 pass
         scheduler_process = None
-        scheduler_status_var.set("●  Detenido")
+        scheduler_status_var.set("⚫  Detenido")
         btn_iniciar.config(state=tk.NORMAL)
         btn_detener.config(state=tk.DISABLED)
         messagebox.showinfo("Scheduler", "Scheduler detenido.")
@@ -810,19 +973,24 @@ def run_gui():
     root.protocol("WM_DELETE_WINDOW", on_closing)
 
     control_frame = ttk.Frame(bottom)
-    control_frame.pack(side=tk.LEFT, padx=5)
+    control_frame.pack(side="left")
 
-    btn_iniciar = ttk.Button(control_frame, text="Iniciar Scheduler", command=iniciar_scheduler)
-    btn_iniciar.pack(side=tk.LEFT, padx=2)
+    btn_iniciar = ttk.Button(control_frame, text="▶  Iniciar Scheduler", command=iniciar_scheduler, style="Accent.TButton")
+    btn_iniciar.pack(side="left", padx=3)
 
-    btn_detener = ttk.Button(control_frame, text="Detener Scheduler", command=detener_scheduler, state=tk.DISABLED)
-    btn_detener.pack(side=tk.LEFT, padx=2)
+    btn_detener = ttk.Button(control_frame, text="⏹  Detener Scheduler", command=detener_scheduler, state="disabled")
+    btn_detener.pack(side="left", padx=3)
 
-    scheduler_status_label = ttk.Label(control_frame, textvariable=scheduler_status_var, foreground="gray")
-    scheduler_status_label.pack(side=tk.LEFT, padx=10)
+    scheduler_status_label = ttk.Label(
+        control_frame, textvariable=scheduler_status_var,
+        foreground=ACCENT, font=("Segoe UI", 10, "bold")
+    )
+    scheduler_status_label.pack(side="left", padx=15)
 
-    ttk.Button(bottom, text="Ejecutar Ahora", command=ejecutar_ahora).pack(side=tk.LEFT, padx=5)
-    ttk.Button(bottom, text="Salir", command=on_closing).pack(side=tk.RIGHT, padx=5)
+    ttk.Button(bottom, text="⚡  Ejecutar Ahora", command=ejecutar_ahora, style="Accent.TButton").pack(side="left", padx=5)
+    ttk.Button(bottom, text="Salir", command=on_closing).pack(side="right", padx=5)
+
+    ttk.Label(bottom, text="v2.1 ·by Andres", foreground="#95a5a6", font=("Segoe UI", 8)).pack(side="right", padx=10)
 
     root.mainloop()
 
@@ -834,7 +1002,7 @@ if __name__ == "__main__":
         if sys.argv[1] == '--scheduler':
             run_scheduler()
         elif sys.argv[1] == '--balance':
-            setup_console()          # Activa la consola para ver la salida
+            setup_console()
             config = load_config()
             run_balance_cycle(config)
         else:

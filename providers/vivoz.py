@@ -8,7 +8,7 @@ from selenium.common.exceptions import TimeoutException
 
 class VivozProvider(BaseProvider):
     name = "Vivoz"
-    sheet_row = 7
+    sheet_row = 6
     sheet_col = 2
 
     config_fields = [
