@@ -503,12 +503,13 @@ def run_gui():
     import tkinter as tk
     from tkinter import ttk, messagebox, filedialog
     import webbrowser
+    import ctypes
 
     root = tk.Tk()
     root.title("Saldos Scheduler")
     root.geometry("835x600")
-    root.minsize(750, 500)
-    root.configure(bg="#f5f6fa")
+    root.minsize(850, 500)
+    root.configure(bg="#1e1e2e")
 
     # Centrar ventana
     root.update_idletasks()
@@ -520,36 +521,52 @@ def run_gui():
     y = (sh - h) // 2
     root.geometry(f"+{x}+{y}")
 
-    # Estilo moderno
+    # Aplicar tema oscuro a la barra de título de Windows
+    def aplicar_tema_oscuro_ventana():
+        try:
+            hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+            # DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Windows 10 20H1+, Windows 11)
+            valor = ctypes.c_int(2)   # 2 = oscuro
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(valor), ctypes.sizeof(valor))
+        except Exception:
+            pass
+    aplicar_tema_oscuro_ventana()
+
+    # Estilo oscuro
     style = ttk.Style()
     style.theme_use("clam")
 
-    BG = "#f5f6fa"
-    FG = "#2c3e50"
-    ACCENT = "#3498db"
-    ACCENT_DARK = "#2980b9"
-    WHITE = "#ffffff"
+    BG = "#1e1e2e"
+    FG = "#cdd6f4"
+    ACCENT = "#89b4fa"
+    ACCENT_HOVER = "#74c7ec"
+    DARKER = "#181825"
+    ENTRY_BG = "#313244"
+    BUTTON_BG = "#45475a"
 
     style.configure(".", background=BG, foreground=FG, font=("Segoe UI", 10))
     style.configure("TFrame", background=BG)
     style.configure("TLabel", background=BG, foreground=FG)
-    style.configure("TLabelframe", background=BG, foreground=FG, borderwidth=0)
-    style.configure("TLabelframe.Label", background=BG, foreground=FG, font=("Segoe UI", 11, "bold"))
+    style.configure("TLabelframe", background=BG, foreground=FG, borderwidth=1, relief="solid", bordercolor="#585b70")
+    style.configure("TLabelframe.Label", background=BG, foreground=ACCENT, font=("Segoe UI", 11, "bold"))
     style.configure("TNotebook", background=BG, borderwidth=0)
-    style.configure("TNotebook.Tab", background="#e0e0e0", foreground=FG, padding=[15, 6], font=("Segoe UI", 10))
-    style.map("TNotebook.Tab", background=[("selected", WHITE)], foreground=[("selected", ACCENT)])
+    style.configure("TNotebook.Tab", background=DARKER, foreground=FG, padding=[18, 8], font=("Segoe UI", 10))
+    style.map("TNotebook.Tab",
+              background=[("selected", ACCENT), ("active", "#45475a")],
+              foreground=[("selected", "#1e1e2e")],
+              padding=[("selected", [22, 10])])  # Pestaña más grande al seleccionar
 
-    style.configure("Accent.TButton", background=ACCENT, foreground=WHITE, borderwidth=0, padding=[15, 6])
-    style.map("Accent.TButton", background=[("active", ACCENT_DARK), ("disabled", "#bdc3c7")])
+    style.configure("Accent.TButton", background=ACCENT, foreground="#1e1e2e", borderwidth=0, padding=[15, 6], font=("Segoe UI", 10, "bold"))
+    style.map("Accent.TButton", background=[("active", ACCENT_HOVER), ("disabled", "#585b70")])
 
-    style.configure("TButton", background="#ecf0f1", foreground=FG, borderwidth=0, padding=[10, 5])
-    style.map("TButton", background=[("active", "#d5dbdb")])
+    style.configure("TButton", background=BUTTON_BG, foreground=FG, borderwidth=0, padding=[10, 5])
+    style.map("TButton", background=[("active", "#585b70")])
 
-    style.configure("Treeview", background=WHITE, fieldbackground=WHITE, foreground=FG, rowheight=30, borderwidth=0)
-    style.configure("Treeview.Heading", background=BG, foreground=FG, font=("Segoe UI", 10, "bold"), borderwidth=0)
-    style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", WHITE)])
+    style.configure("Treeview", background=ENTRY_BG, fieldbackground=ENTRY_BG, foreground=FG, rowheight=30, borderwidth=0)
+    style.configure("Treeview.Heading", background=DARKER, foreground=ACCENT, font=("Segoe UI", 10, "bold"), borderwidth=0)
+    style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", "#1e1e2e")])
 
-    style.configure("TEntry", fieldbackground=WHITE, borderwidth=1, relief="solid")
+    style.configure("TEntry", fieldbackground=ENTRY_BG, foreground=FG, borderwidth=1, relief="solid", bordercolor="#585b70")
 
     scheduler_process = None
     scheduler_status_var = tk.StringVar(value="⚫  Detenido")
@@ -620,7 +637,7 @@ def run_gui():
         win = tk.Toplevel(root)
         win.title(f"Configurar {provider.name}")
         win.geometry("400x350")
-        win.configure(bg=WHITE)
+        win.configure(bg=BG)
         win.transient(root)
         win.grab_set()
         entries = {}
@@ -848,7 +865,7 @@ def run_gui():
         win = tk.Toplevel(root)
         win.title("Cómo obtener credenciales.json")
         win.geometry("550x500")
-        win.configure(bg=WHITE)
+        win.configure(bg=BG)
         texto = (
             "1. Ve a: https://console.cloud.google.com/\n"
             "2. Inicia sesión con tu cuenta de Google.\n"
@@ -990,7 +1007,7 @@ def run_gui():
     ttk.Button(bottom, text="⚡  Ejecutar Ahora", command=ejecutar_ahora, style="Accent.TButton").pack(side="left", padx=5)
     ttk.Button(bottom, text="Salir", command=on_closing).pack(side="right", padx=5)
 
-    ttk.Label(bottom, text="v2.1 ·by Andres", foreground="#95a5a6", font=("Segoe UI", 8)).pack(side="right", padx=10)
+    ttk.Label(bottom, text="v2.1 ·by Andres", foreground="#6c7086", font=("Segoe UI", 8)).pack(side="right", padx=10)
 
     root.mainloop()
 
