@@ -13,6 +13,7 @@ class DataVoiceProvider(BaseProvider):
     config_fields = [
         {"key": "usuario", "label": "Usuario", "type": "str", "default": "colombiaredvozip"},
         {"key": "password", "label": "Contraseña", "type": "str", "default": "colombiaredvozip"},
+        {"key": "url", "label": "URL", "type": "str", "default": "http://clientes.datavoice.com.co/Callshop/Login?ReturnUrl=%2fCallshop%2f"},
     ]
 
     def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None):
@@ -24,7 +25,7 @@ class DataVoiceProvider(BaseProvider):
             return False, "No se pudo crear el driver"
 
         try:
-            driver.get("http://clientes.datavoice.com.co/Callshop/Login?ReturnUrl=%2fCallshop%2f")
+            driver.get(config.get("url") or "http://clientes.datavoice.com.co/Callshop/Login?ReturnUrl=%2fCallshop%2f")
             # Bypass interstitial (llamar a la función bypass del original si existe)
             # Si no, puedes incluirla aquí mismo.
 

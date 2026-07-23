@@ -18,6 +18,7 @@ class IDTProvider(BaseProvider):
         {"key": "password", "label": "Contraseña", "type": "str", "default": "LDfjHfol32!ceLmN"},
         {"key": "pet_answer", "label": "Respuesta mascota", "type": "str", "default": "Yankee"},
         {"key": "author_answer", "label": "Autor favorito", "type": "str", "default": "Eckhart Tollee"},
+        {"key": "url", "label": "URL", "type": "str", "default": "https://secure.idtexpress.com/"},
     ]
 
     def _handle_security_questions(self, driver, pet_answer, author_answer):
@@ -113,7 +114,7 @@ class IDTProvider(BaseProvider):
         if not driver:
             return False, "No se pudo crear el driver"
 
-        TARGET_URL = "https://secure.idtexpress.com/"
+        TARGET_URL = config.get("url") or "https://secure.idtexpress.com/"
         try:
             driver.get(TARGET_URL)
             wait = WebDriverWait(driver, 40)

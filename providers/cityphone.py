@@ -12,6 +12,7 @@ class CityphoneProvider(BaseProvider):
     config_fields = [
         {"key": "usuario", "label": "Usuario", "type": "str", "default": "redcolombia"},
         {"key": "password", "label": "Contraseña", "type": "str", "default": "c1tyipC0lreeD@"},
+        {"key": "url", "label": "URL", "type": "str", "default": "https://www.voip-llamada.com/voip/"},
     ]
 
     def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None):
@@ -23,7 +24,7 @@ class CityphoneProvider(BaseProvider):
             return False, "No se pudo crear el driver"
 
         try:
-            driver.get("https://www.voip-llamada.com/voip/")
+            driver.get(config.get("url") or "https://www.voip-llamada.com/voip/")
             try:
                 WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.NAME, "acepto"))).click()
             except Exception:

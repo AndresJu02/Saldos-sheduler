@@ -14,6 +14,7 @@ class VivozProvider(BaseProvider):
     config_fields = [
         {"key": "usuario", "label": "Usuario", "type": "str", "default": "colombiared"},
         {"key": "password", "label": "Contraseña", "type": "str", "default": "v1v0zzc0lrEd@"},
+        {"key": "url", "label": "URL", "type": "str", "default": "http://178.105.24.84/billing/"},
     ]
 
     def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None):
@@ -36,7 +37,7 @@ class VivozProvider(BaseProvider):
             driver = webdriver.Chrome(service=service, options=opts)
 
         try:
-            driver.get("http://178.105.24.84/billing/")
+            driver.get(config.get("url") or "http://178.105.24.84/billing/")
 
             # Bypass interstitial HTTP inseguro (como en el original)
             bypass_insecure_interstitial(driver)

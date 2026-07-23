@@ -9,6 +9,7 @@ class MOR1980Provider(BaseProvider):
     config_fields = [
         {"key": "usuario", "label": "Usuario", "type": "str", "default": "Colombiared-v1"},
         {"key": "password", "label": "Contraseña", "type": "str", "default": "tBanbMgj"},
+        {"key": "url", "label": "URL", "type": "str", "default": "http://158.69.177.101:8148/customer/eng/index.html"},
     ]
 
     def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None):
@@ -20,7 +21,7 @@ class MOR1980Provider(BaseProvider):
             return False, "No se pudo crear el driver"
 
         site_cfg = {
-            "url": "http://158.69.177.101:8148/customer/eng/index.html",
+            "url": config.get("url") or "http://158.69.177.101:8148/customer/eng/index.html",
             "login_type_text": "Mapping Gateway",
             "number": config["usuario"],
             "password": config["password"],

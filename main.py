@@ -588,6 +588,25 @@ def run_gui():
 
     style.configure("TEntry", fieldbackground=ENTRY_BG, foreground=FG, borderwidth=1, relief="solid", bordercolor="#585b70")
 
+    # --- Combobox: evita el "flash" blanco al abrir/seleccionar una opción ---
+    style.configure("TCombobox",
+                     fieldbackground=ENTRY_BG, background=ENTRY_BG, foreground=FG,
+                     arrowcolor=FG, bordercolor="#585b70", lightcolor=ENTRY_BG, darkcolor=ENTRY_BG,
+                     selectbackground=ENTRY_BG, selectforeground=FG, insertcolor=FG)
+    style.map("TCombobox",
+              fieldbackground=[("readonly", ENTRY_BG), ("disabled", ENTRY_BG), ("!disabled", ENTRY_BG)],
+              foreground=[("readonly", FG), ("disabled", "#6c7086")],
+              background=[("readonly", ENTRY_BG), ("active", BUTTON_BG)],
+              selectbackground=[("readonly", ENTRY_BG)],
+              selectforeground=[("readonly", FG)])
+    # El menú desplegable (popdown) de Combobox no es un widget ttk, así que se
+    # colorea aparte con option_add para que combine con el tema oscuro.
+    root.option_add("*TCombobox*Listbox.background", ENTRY_BG)
+    root.option_add("*TCombobox*Listbox.foreground", FG)
+    root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+    root.option_add("*TCombobox*Listbox.selectForeground", "#1e1e2e")
+    root.option_add("*TCombobox*Listbox.font", ("Segoe UI", 10))
+
     scheduler_process = None
     scheduler_status_var = tk.StringVar(value="⚫  Detenido")
     config = load_config()
@@ -656,7 +675,8 @@ def run_gui():
 
         win = tk.Toplevel(root)
         win.title(f"Configurar {provider.name}")
-        win.geometry("400x350")
+        alto = 140 + (len(provider.config_fields) + 3) * 48
+        win.geometry(f"420x{min(max(alto, 300), 560)}")
         win.configure(bg=BG)
         win.transient(root)
         win.grab_set()
@@ -666,7 +686,8 @@ def run_gui():
         for idx, field in enumerate(provider.config_fields):
             ttk.Label(win, text=field["label"], font=("Segoe UI", 10)).grid(row=idx, column=0, sticky="w", padx=15, pady=8)
             var = tk.StringVar(value=prov_cfg.get(field["key"], field.get("default", "")))
-            ttk.Entry(win, textvariable=var, width=30).grid(row=idx, column=1, padx=15, pady=8)
+            ancho = 38 if field["key"] == "url" else 30
+            ttk.Entry(win, textvariable=var, width=ancho).grid(row=idx, column=1, padx=15, pady=8)
             entries[field["key"]] = var
 
         row_offset = len(provider.config_fields)
@@ -803,10 +824,20 @@ def run_gui():
                     tree.focus(child)
                     break
 
-    def agregar_proveedor():
+    def abrir_formulario_proveedor(nombre_original=None):
+        """Abre el formulario de proveedor genérico. Si nombre_original viene
+        dado, precarga los datos existentes de ese proveedor y guarda como
+        edición (en vez de crear uno nuevo)."""
+        datos_existentes = {}
+        if nombre_original:
+            for c in config.get("custom_providers", []):
+                if c.get("name") == nombre_original:
+                    datos_existentes = dict(c)
+                    break
+
         win = tk.Toplevel(root)
-        win.title("Agregar proveedor")
-        win.geometry("520x640")
+        win.title(f"Editar proveedor: {nombre_original}" if nombre_original else "Agregar proveedor")
+        win.geometry("560x640")
         win.configure(bg=BG)
         win.transient(root)
         win.grab_set()
@@ -814,19 +845,37 @@ def run_gui():
         canvas = tk.Canvas(win, bg=BG, highlightthickness=0)
         vscroll = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
         form = ttk.Frame(canvas)
+        form_window = canvas.create_window((0, 0), window=form, anchor="nw")
         form.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=form, anchor="nw")
+        # El frame interno debe ocupar todo el ancho del canvas (para que se
+        # vea bien al redimensionar la ventana).
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(form_window, width=e.width))
         canvas.configure(yscrollcommand=vscroll.set)
         canvas.pack(side="left", fill="both", expand=True)
         vscroll.pack(side="right", fill="y")
+
+        # --- Scroll con la rueda del mouse (Windows: <MouseWheel>) ---
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _bind_mousewheel(_event=None):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _unbind_mousewheel(_event=None):
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", _bind_mousewheel)
+        canvas.bind("<Leave>", _unbind_mousewheel)
+        win.bind("<Destroy>", lambda e: _unbind_mousewheel())
 
         vars_ = {}
         row = [0]
 
         def add_field(label, key, default="", width=40):
+            valor = datos_existentes.get(key, default)
             ttk.Label(form, text=label, font=("Segoe UI", 10)).grid(
                 row=row[0], column=0, sticky="w", padx=15, pady=6)
-            var = tk.StringVar(value=default)
+            var = tk.StringVar(value=valor)
             ttk.Entry(form, textvariable=var, width=width).grid(
                 row=row[0], column=1, padx=15, pady=6, sticky="w")
             vars_[key] = var
@@ -834,9 +883,10 @@ def run_gui():
             return var
 
         def add_selector_combo(label, key, default_type="name"):
+            valor = datos_existentes.get(key, default_type)
             ttk.Label(form, text=label, font=("Segoe UI", 10)).grid(
                 row=row[0], column=0, sticky="w", padx=15, pady=6)
-            var = tk.StringVar(value=default_type)
+            var = tk.StringVar(value=valor)
             combo = ttk.Combobox(form, textvariable=var, values=["name", "id", "css", "xpath"],
                                   width=10, state="readonly")
             combo.grid(row=row[0], column=1, padx=15, pady=6, sticky="w")
@@ -984,24 +1034,47 @@ def run_gui():
                 return
             existentes = config.setdefault("custom_providers", [])
             nombres_todos = {p.name for p in get_all_providers()}
-            editando = any(c.get("name") == definicion["name"] for c in existentes)
-            if not editando and definicion["name"] in nombres_todos:
+            nombre_nuevo = definicion["name"]
+
+            # Si estamos editando y el usuario NO cambió el nombre, se excluye
+            # a sí mismo de la validación de duplicados; si SÍ lo cambió,
+            # solo se excluye el nombre original.
+            colision = nombre_nuevo in nombres_todos and nombre_nuevo != nombre_original
+            if colision:
                 messagebox.showerror("Nombre repetido", "Ya existe un proveedor con ese nombre.")
                 return
 
-            existentes[:] = [c for c in existentes if c.get("name") != definicion["name"]]
+            # Quita cualquier entrada previa con el nombre original (edición)
+            # o con el nuevo nombre (por si acaso), y agrega la definición actualizada.
+            existentes[:] = [c for c in existentes
+                              if c.get("name") not in (nombre_original, nombre_nuevo)]
             existentes.append(definicion)
+
+            # Si se renombró el proveedor, actualiza las referencias existentes
+            # conservando su posición y estado (habilitado / orden / config extra).
+            if nombre_original and nombre_original != nombre_nuevo:
+                enabled = config.setdefault("enabled_providers", [])
+                config["enabled_providers"] = [nombre_nuevo if n == nombre_original else n for n in enabled]
+
+                order = config.setdefault("provider_order", [])
+                config["provider_order"] = [nombre_nuevo if n == nombre_original else n for n in order]
+
+                providers_cfg = config.setdefault("providers_config", {})
+                if nombre_original in providers_cfg:
+                    providers_cfg[nombre_nuevo] = providers_cfg.pop(nombre_original)
+
             save_config(config)
 
             enabled = config.setdefault("enabled_providers", [])
-            if definicion["name"] not in enabled:
-                enabled.append(definicion["name"])
+            if nombre_nuevo not in enabled:
+                enabled.append(nombre_nuevo)
             order = config.setdefault("provider_order", [])
-            if definicion["name"] not in order:
-                order.append(definicion["name"])
+            if nombre_nuevo not in order:
+                order.append(nombre_nuevo)
             save_config(config)
 
-            messagebox.showinfo("Guardado", f"Proveedor '{definicion['name']}' guardado y habilitado.")
+            accion = "actualizado" if nombre_original else "guardado y habilitado"
+            messagebox.showinfo("Guardado", f"Proveedor '{nombre_nuevo}' {accion}.")
             win.destroy()
             refresh_tree()
 
@@ -1015,6 +1088,26 @@ def run_gui():
                               "Al guardar, la ejecución real siempre corre oculta, como los demás proveedores.",
                   foreground="#9399b2", font=("Segoe UI", 8), justify="left").grid(
             row=row[0], column=0, columnspan=2, sticky="w", padx=15, pady=(0, 10))
+
+    def agregar_proveedor():
+        abrir_formulario_proveedor(nombre_original=None)
+
+    def editar_proveedor():
+        selecciones = tree.selection()
+        if not selecciones:
+            messagebox.showinfo("Seleccionar", "Seleccione un proveedor primero.")
+            return
+        nombre = str(tree.item(selecciones[0])["values"][0]).strip()
+        custom_names = get_custom_provider_names(config)
+        if nombre not in custom_names:
+            messagebox.showwarning(
+                "No editable aquí",
+                "Solo los proveedores creados con 'Agregar proveedor' se pueden editar aquí.\n"
+                "Para los proveedores incluidos en la aplicación, usa el botón 'Configurar' "
+                "(usuario, contraseña, URL y ubicación en la hoja)."
+            )
+            return
+        abrir_formulario_proveedor(nombre_original=nombre)
 
     def eliminar_proveedor():
         selecciones = tree.selection()
@@ -1043,6 +1136,7 @@ def run_gui():
     ttk.Button(btn_panel, text="⚙  Configurar", command=configurar_proveedor, style="Accent.TButton", width=20).pack(pady=4, fill="x")
     ttk.Button(btn_panel, text="↻  Habilitar / Deshab.", command=toggle_proveedor, width=20).pack(pady=4, fill="x")
     ttk.Button(btn_panel, text="＋  Agregar proveedor", command=agregar_proveedor, width=20).pack(pady=4, fill="x")
+    ttk.Button(btn_panel, text="✎  Editar proveedor", command=editar_proveedor, width=20).pack(pady=4, fill="x")
     ttk.Button(btn_panel, text="🗑  Eliminar proveedor", command=eliminar_proveedor, width=20).pack(pady=4, fill="x")
     ttk.Separator(btn_panel, orient="horizontal").pack(fill="x", pady=10)
     ttk.Label(btn_panel, text="Orden:", font=("Segoe UI", 10, "bold")).pack()

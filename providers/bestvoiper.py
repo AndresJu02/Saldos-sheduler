@@ -12,6 +12,7 @@ class BestVoIPerProvider(BaseProvider):
     config_fields = [
         {"key": "usuario", "label": "Usuario", "type": "str", "default": "COLOMBIARED"},
         {"key": "password", "label": "Contraseña", "type": "str", "default": "Bestvoiper2023"},
+        {"key": "url", "label": "URL", "type": "str", "default": "https://sw4.bestvoiper.com/reporteria/ingreso"},
     ]
 
     def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None):
@@ -22,7 +23,7 @@ class BestVoIPerProvider(BaseProvider):
         if not driver:
             return False, "No se pudo crear el driver"
 
-        BESTVOIPER_URL = "https://sw4.bestvoiper.com/reporteria/ingreso"
+        BESTVOIPER_URL = config.get("url") or "https://sw4.bestvoiper.com/reporteria/ingreso"
         try:
             wait = WebDriverWait(driver, 40)
             driver.get(BESTVOIPER_URL)

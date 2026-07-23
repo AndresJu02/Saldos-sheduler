@@ -8,12 +8,13 @@ class DIDWWProvider(BaseProvider):
 
     config_fields = [
         {"key": "api_key", "label": "API Key", "type": "str", "default": "tpD8CvI2Zt$xjxEq1wj1TW5kUAW!JBwP"},
+        {"key": "url", "label": "URL API", "type": "str", "default": "https://api.didww.com/v3/balance"},
     ]
 
     def get_balance(self, config, google_sheet, sheet_url, driver_paths=None, get_driver_fn=None):
         # DIDWW no necesita navegador
         try:
-            url = "https://api.didww.com/v3/balance"
+            url = config.get("url") or "https://api.didww.com/v3/balance"
             headers = {
                 "Api-Key": config["api_key"],
                 "Accept": "application/vnd.api+json",

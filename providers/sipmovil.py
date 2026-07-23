@@ -9,6 +9,7 @@ class MORSipMovilProvider(BaseProvider):
     config_fields = [
         {"key": "usuario", "label": "Número", "type": "str", "default": "576017942720"},
         {"key": "password", "label": "Contraseña", "type": "str", "default": "65741274"},
+        {"key": "url", "label": "URL", "type": "str", "default": "http://45.226.115.82:8080/eng/index.html"},
     ]
 
     def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None):
@@ -20,7 +21,7 @@ class MORSipMovilProvider(BaseProvider):
             return False, "No se pudo crear el driver"
 
         site_cfg = {
-            "url": "http://45.226.115.82:8080/eng/index.html",
+            "url": config.get("url") or "http://45.226.115.82:8080/eng/index.html",
             "login_type_text": "Phone",
             "number": config["usuario"],
             "password": config["password"],
