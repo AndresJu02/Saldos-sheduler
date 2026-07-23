@@ -55,6 +55,8 @@ CREDENTIALS_FILE = BASE_DIR / 'credenciales.json'
 CHROME_DIR = BASE_DIR / 'chrome-portable'
 CHROMEDRIVER_DIR = BASE_DIR / 'chromedriver-portable'
 
+DEFAULT_BALANCE_REGEX = r"[-+]?\d[\d\.,]*"
+
 CHROME_VERSION = "148.0.7778.217"
 CHROME_URL = f"https://storage.googleapis.com/chrome-for-testing-public/{CHROME_VERSION}/win64/chrome-win64.zip"
 CHROMEDRIVER_URL = f"https://storage.googleapis.com/chrome-for-testing-public/{CHROME_VERSION}/win64/chromedriver-win64.zip"
@@ -293,7 +295,25 @@ def get_all_providers():
     for p in load_providers_from_dir(external):
         if p.name not in nombres:
             providers.append(p)
+
+    # Proveedores genéricos creados desde la GUI (botón "Agregar proveedor")
+    try:
+        from generic_provider import GenericWebProvider
+        cfg = load_config()
+        for custom in cfg.get("custom_providers", []):
+            nombre = str(custom.get("name", "")).strip()
+            if nombre and nombre not in nombres:
+                providers.append(GenericWebProvider(custom))
+                nombres.add(nombre)
+    except Exception as e:
+        logger.warning(f"No se pudieron cargar proveedores genéricos: {e}")
+
     return providers
+
+
+def get_custom_provider_names(config: dict) -> set:
+    """Nombres de proveedores creados con el formulario 'Agregar proveedor'."""
+    return {str(c.get("name", "")).strip() for c in config.get("custom_providers", []) if c.get("name")}
 
 import providers.vos_helpers
 
@@ -784,18 +804,246 @@ def run_gui():
                     break
 
     def agregar_proveedor():
-        messagebox.showinfo(
-            "Agregar proveedor",
-            "Para añadir un nuevo proveedor:\n\n"
-            "1. Coloca su archivo .py en la carpeta 'providers' junto al ejecutable.\n"
-            "2. La clase debe heredar de BaseProvider.\n"
-            "3. Reinicia la aplicación.\n\n"
-            "Puedes copiar uno existente como plantilla."
-        )
+        win = tk.Toplevel(root)
+        win.title("Agregar proveedor")
+        win.geometry("520x640")
+        win.configure(bg=BG)
+        win.transient(root)
+        win.grab_set()
+
+        canvas = tk.Canvas(win, bg=BG, highlightthickness=0)
+        vscroll = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        form = ttk.Frame(canvas)
+        form.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=form, anchor="nw")
+        canvas.configure(yscrollcommand=vscroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vscroll.pack(side="right", fill="y")
+
+        vars_ = {}
+        row = [0]
+
+        def add_field(label, key, default="", width=40):
+            ttk.Label(form, text=label, font=("Segoe UI", 10)).grid(
+                row=row[0], column=0, sticky="w", padx=15, pady=6)
+            var = tk.StringVar(value=default)
+            ttk.Entry(form, textvariable=var, width=width).grid(
+                row=row[0], column=1, padx=15, pady=6, sticky="w")
+            vars_[key] = var
+            row[0] += 1
+            return var
+
+        def add_selector_combo(label, key, default_type="name"):
+            ttk.Label(form, text=label, font=("Segoe UI", 10)).grid(
+                row=row[0], column=0, sticky="w", padx=15, pady=6)
+            var = tk.StringVar(value=default_type)
+            combo = ttk.Combobox(form, textvariable=var, values=["name", "id", "css", "xpath"],
+                                  width=10, state="readonly")
+            combo.grid(row=row[0], column=1, padx=15, pady=6, sticky="w")
+            vars_[key] = var
+            row[0] += 1
+            return var
+
+        ttk.Label(form, text="Datos del sitio", font=("Segoe UI", 11, "bold"),
+                  foreground=ACCENT).grid(row=row[0], column=0, columnspan=2, sticky="w", padx=15, pady=(10, 4))
+        row[0] += 1
+
+        add_field("Nombre del proveedor *", "name")
+        add_field("URL de inicio de sesión *", "url", width=48)
+        add_field("Usuario (por defecto)", "usuario_default")
+        add_field("Contraseña (por defecto)", "password_default")
+
+        ttk.Label(form, text="Selector campo Usuario", font=("Segoe UI", 11, "bold"),
+                  foreground=ACCENT).grid(row=row[0], column=0, columnspan=2, sticky="w", padx=15, pady=(14, 4))
+        row[0] += 1
+        add_selector_combo("Tipo", "user_selector_type", "name")
+        add_field("Valor (ej: username)", "user_selector")
+
+        ttk.Label(form, text="Selector campo Contraseña", font=("Segoe UI", 11, "bold"),
+                  foreground=ACCENT).grid(row=row[0], column=0, columnspan=2, sticky="w", padx=15, pady=(14, 4))
+        row[0] += 1
+        add_selector_combo("Tipo", "pass_selector_type", "name")
+        add_field("Valor (ej: password)", "pass_selector")
+
+        ttk.Label(form, text="Botón enviar (opcional; si se deja vacío, se usa ENTER)",
+                  font=("Segoe UI", 11, "bold"), foreground=ACCENT).grid(
+            row=row[0], column=0, columnspan=2, sticky="w", padx=15, pady=(14, 4))
+        row[0] += 1
+        add_selector_combo("Tipo", "submit_selector_type", "css")
+        add_field("Valor (ej: button[type=submit])", "submit_selector")
+
+        ttk.Label(form, text="Dónde leer el saldo", font=("Segoe UI", 11, "bold"),
+                  foreground=ACCENT).grid(row=row[0], column=0, columnspan=2, sticky="w", padx=15, pady=(14, 4))
+        row[0] += 1
+        add_selector_combo("Tipo", "balance_selector_type", "xpath")
+        add_field("Valor (ej: //span[@class='balance'])", "balance_selector", width=48)
+        add_field("Regex de extracción (opcional)", "balance_regex", default=DEFAULT_BALANCE_REGEX, width=48)
+        add_field("Prefijo (ej: '$ ')", "prefix")
+        add_field("Sufijo (ej: ' USD')", "suffix")
+        add_field("Espera tras login (segundos)", "wait_after_login", default="1.5", width=10)
+        add_field("Timeout de carga (segundos)", "timeout", default="30", width=10)
+
+        ttk.Label(form, text="Ubicación en la hoja de cálculo", font=("Segoe UI", 11, "bold"),
+                  foreground=ACCENT).grid(row=row[0], column=0, columnspan=2, sticky="w", padx=15, pady=(14, 4))
+        row[0] += 1
+        add_field("Fila (Sheet Row)", "sheet_row", default="1", width=10)
+        add_field("Columna (Sheet Col)", "sheet_col", default="1", width=10)
+
+        aviso = ("Nota: este formulario cubre sitios con login simple de usuario/contraseña "
+                 "en una sola página. Sitios con captcha, varios pasos o iframes anidados "
+                 "todavía requieren un archivo .py a medida en la carpeta 'providers'.")
+        ttk.Label(form, text=aviso, foreground="#9399b2", wraplength=440, justify="left",
+                  font=("Segoe UI", 9)).grid(row=row[0], column=0, columnspan=2, sticky="w", padx=15, pady=(14, 4))
+        row[0] += 1
+
+        def leer_definicion():
+            nombre = vars_["name"].get().strip()
+            url = vars_["url"].get().strip()
+            if not nombre or not url:
+                messagebox.showerror("Faltan datos", "El nombre y la URL son obligatorios.")
+                return None
+            if not vars_["user_selector"].get().strip() or not vars_["pass_selector"].get().strip():
+                messagebox.showerror("Faltan datos", "Debes indicar el selector de usuario y de contraseña.")
+                return None
+            if not vars_["balance_selector"].get().strip():
+                messagebox.showerror("Faltan datos", "Debes indicar el selector donde está el saldo.")
+                return None
+            try:
+                sheet_row = int(vars_["sheet_row"].get().strip())
+                sheet_col = int(vars_["sheet_col"].get().strip())
+            except ValueError:
+                messagebox.showerror("Error", "Fila y columna deben ser números.")
+                return None
+
+            return {
+                "name": nombre,
+                "url": url,
+                "usuario_default": vars_["usuario_default"].get(),
+                "password_default": vars_["password_default"].get(),
+                "user_selector_type": vars_["user_selector_type"].get(),
+                "user_selector": vars_["user_selector"].get().strip(),
+                "pass_selector_type": vars_["pass_selector_type"].get(),
+                "pass_selector": vars_["pass_selector"].get().strip(),
+                "submit_selector_type": vars_["submit_selector_type"].get(),
+                "submit_selector": vars_["submit_selector"].get().strip(),
+                "balance_selector_type": vars_["balance_selector_type"].get(),
+                "balance_selector": vars_["balance_selector"].get().strip(),
+                "balance_regex": vars_["balance_regex"].get().strip() or DEFAULT_BALANCE_REGEX,
+                "prefix": vars_["prefix"].get(),
+                "suffix": vars_["suffix"].get(),
+                "wait_after_login": vars_["wait_after_login"].get().strip() or "1.5",
+                "timeout": vars_["timeout"].get().strip() or "30",
+                "sheet_row": sheet_row,
+                "sheet_col": sheet_col,
+            }
+
+        def probar_ahora():
+            definicion = leer_definicion()
+            if not definicion:
+                return
+            if not Path(config.get("credentials_path", "")).exists():
+                messagebox.showerror("Error", "Configura primero las credenciales de Google (pestaña Configuración).")
+                return
+
+            btn_probar.config(state="disabled", text="Probando...")
+            win.update_idletasks()
+
+            def tarea():
+                from generic_provider import GenericWebProvider
+                try:
+                    chrome_exe = ensure_chrome()
+                    chromedriver_exe = ensure_chromedriver()
+                    provider = GenericWebProvider(definicion)
+                    test_cfg = {
+                        "usuario": definicion.get("usuario_default", ""),
+                        "password": definicion.get("password_default", ""),
+                    }
+                    ok, msg = provider.get_balance(
+                        test_cfg, None, "",
+                        driver_paths={"chrome_exe": chrome_exe, "chromedriver_exe": chromedriver_exe},
+                        get_driver_fn=get_robust_driver,
+                        headless=False
+                    )
+                except Exception as e:
+                    ok, msg = False, str(e)
+
+                def mostrar():
+                    btn_probar.config(state="normal", text="🧪  Probar ahora")
+                    if ok:
+                        messagebox.showinfo("Prueba exitosa", f"Saldo detectado: {msg}\n\n"
+                                             "(No se escribió en la hoja, esto fue solo una prueba de conexión.)")
+                    else:
+                        messagebox.showerror("Prueba fallida", f"No se pudo leer el saldo:\n{msg}")
+                win.after(0, mostrar)
+
+            threading.Thread(target=tarea, daemon=True).start()
+
+        def guardar_proveedor():
+            definicion = leer_definicion()
+            if not definicion:
+                return
+            existentes = config.setdefault("custom_providers", [])
+            nombres_todos = {p.name for p in get_all_providers()}
+            editando = any(c.get("name") == definicion["name"] for c in existentes)
+            if not editando and definicion["name"] in nombres_todos:
+                messagebox.showerror("Nombre repetido", "Ya existe un proveedor con ese nombre.")
+                return
+
+            existentes[:] = [c for c in existentes if c.get("name") != definicion["name"]]
+            existentes.append(definicion)
+            save_config(config)
+
+            enabled = config.setdefault("enabled_providers", [])
+            if definicion["name"] not in enabled:
+                enabled.append(definicion["name"])
+            order = config.setdefault("provider_order", [])
+            if definicion["name"] not in order:
+                order.append(definicion["name"])
+            save_config(config)
+
+            messagebox.showinfo("Guardado", f"Proveedor '{definicion['name']}' guardado y habilitado.")
+            win.destroy()
+            refresh_tree()
+
+        btns = ttk.Frame(form)
+        btns.grid(row=row[0], column=0, columnspan=2, pady=(18, 4), padx=15, sticky="ew")
+        btn_probar = ttk.Button(btns, text="🧪  Probar ahora", command=probar_ahora)
+        btn_probar.pack(side="left", padx=(0, 8))
+        ttk.Button(btns, text="💾  Guardar", command=guardar_proveedor, style="Accent.TButton").pack(side="left")
+        row[0] += 1
+        ttk.Label(form, text="La prueba abre el navegador visible para que puedas ver qué hace paso a paso.\n"
+                              "Al guardar, la ejecución real siempre corre oculta, como los demás proveedores.",
+                  foreground="#9399b2", font=("Segoe UI", 8), justify="left").grid(
+            row=row[0], column=0, columnspan=2, sticky="w", padx=15, pady=(0, 10))
+
+    def eliminar_proveedor():
+        selecciones = tree.selection()
+        if not selecciones:
+            messagebox.showinfo("Seleccionar", "Seleccione un proveedor primero.")
+            return
+        nombre = str(tree.item(selecciones[0])["values"][0]).strip()
+        custom_names = get_custom_provider_names(config)
+        if nombre not in custom_names:
+            messagebox.showwarning(
+                "No permitido",
+                "Solo se pueden eliminar proveedores creados con 'Agregar proveedor'.\n"
+                "Los proveedores incluidos en la aplicación no se pueden borrar desde aquí."
+            )
+            return
+        if not messagebox.askyesno("Confirmar", f"¿Eliminar el proveedor '{nombre}'? Esta acción no se puede deshacer."):
+            return
+
+        config["custom_providers"] = [c for c in config.get("custom_providers", []) if c.get("name") != nombre]
+        config["enabled_providers"] = [n for n in config.get("enabled_providers", []) if n != nombre]
+        config["provider_order"] = [n for n in config.get("provider_order", []) if n != nombre]
+        config.get("providers_config", {}).pop(nombre, None)
+        save_config(config)
+        refresh_tree()
 
     ttk.Button(btn_panel, text="⚙  Configurar", command=configurar_proveedor, style="Accent.TButton", width=20).pack(pady=4, fill="x")
     ttk.Button(btn_panel, text="↻  Habilitar / Deshab.", command=toggle_proveedor, width=20).pack(pady=4, fill="x")
     ttk.Button(btn_panel, text="＋  Agregar proveedor", command=agregar_proveedor, width=20).pack(pady=4, fill="x")
+    ttk.Button(btn_panel, text="🗑  Eliminar proveedor", command=eliminar_proveedor, width=20).pack(pady=4, fill="x")
     ttk.Separator(btn_panel, orient="horizontal").pack(fill="x", pady=10)
     ttk.Label(btn_panel, text="Orden:", font=("Segoe UI", 10, "bold")).pack()
     ttk.Button(btn_panel, text="↑  Subir", command=mover_arriba, width=20).pack(pady=2, fill="x")
