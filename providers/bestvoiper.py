@@ -61,7 +61,8 @@ class BestVoIPerProvider(BaseProvider):
             else:
                 formatted = raw
 
-            google_sheet.update_cell(self.sheet_row, self.sheet_col, formatted)
+            if google_sheet is not None:
+                google_sheet.update_cell(self.sheet_row, self.sheet_col, formatted)
             return True, formatted
 
         except Exception as e:

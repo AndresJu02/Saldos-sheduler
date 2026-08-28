@@ -44,19 +44,18 @@ class VivozProvider(BaseProvider):
             bypass_insecure_interstitial(driver)
 
             # Login
-            WebDriverWait(driver, 40).until(
+            WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.NAME, "login[username]"))
             ).send_keys(config["usuario"])
             driver.find_element(By.NAME, "login[psw]").send_keys(config["password"])
             driver.find_element(By.NAME, "commit").click()
 
-            # Esperar Quick Stats
+            # Esperar Quick Stats (el panel puede cargar en inglés o en español,
+            # por eso comprobamos por ID -que no cambia con el idioma- en vez
+            # de por el texto del título).
             try:
-                WebDriverWait(driver, 20).until(
-                    EC.any_of(
-                        EC.element_to_be_clickable((By.ID, "qs_refresh")),
-                        EC.presence_of_element_located((By.XPATH, "//*[contains(., 'Quick Stats') or contains(., 'Balance')]"))
-                    )
+                WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.ID, "qs_refresh"))
                 )
             except TimeoutException:
                 pass
@@ -67,33 +66,49 @@ class VivozProvider(BaseProvider):
             except Exception:
                 pass
 
-            # Esperar a que aparezca Balance
+            # Esperar a que aparezca el saldo, en cualquiera de los dos idiomas
+            # en los que el panel puede renderizarse ("Balance:" o "Saldo:").
+            def _saldo_visible(d):
+                try:
+                    txt = d.find_element(By.ID, "show_quick_stats").text
+                except Exception:
+                    return False
+                return bool(re.search(r"balance|saldo", txt, re.IGNORECASE))
+
             try:
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.ID, "show_quick_stats"))
                 )
-                WebDriverWait(driver, 40).until(
-                    EC.text_to_be_present_in_element((By.ID, "show_quick_stats"), "Balance")
-                )
+                WebDriverWait(driver, 40).until(_saldo_visible)
             except TimeoutException:
                 pass
 
-            # Intentar extraer el balance con los mismos localizadores del script original
+            # Intentar extraer el balance con los mismos localizadores del script
+            # original, repetidos para las dos etiquetas posibles: "Balance" (inglés)
+            # y "Saldo" (español) -el panel alterna entre los dos idiomas-.
             raw_text = None
             candidates = [
-                (By.XPATH, "//td[text()='Balance:']/following-sibling::td"),
-                (By.XPATH, "//*[contains(normalize-space(text()),'Balance')]/following::td[1]"),
-                (By.XPATH, "//b[contains(normalize-space(text()),'Balance')]/ancestor::td/following-sibling::td[1]"),
-                (By.XPATH, "//td[contains(.,'Balance')]/following-sibling::td[1]"),
+                (By.XPATH, 'id("quick_stats")/tbody[1]/tr[12]/td[2]'),
             ]
+            for etiqueta in ("Balance", "Saldo"):
+                candidates += [
+                    (By.XPATH, f"//td[normalize-space(text())='{etiqueta}:']/following-sibling::td"),
+                    (By.XPATH, f"//*[contains(normalize-space(text()),'{etiqueta}')]/following::td[1]"),
+                    (By.XPATH, f"//b[contains(normalize-space(text()),'{etiqueta}')]/ancestor::td/following-sibling::td[1]"),
+                    (By.XPATH, f"//td[contains(.,'{etiqueta}')]/following-sibling::td[1]"),
+                ]
             for _ in range(2):  # reintento
                 for locator in candidates:
                     try:
                         el = WebDriverWait(driver, 5).until(EC.presence_of_element_located(locator))
                         raw_text = driver.execute_script("return arguments[0].textContent;", el) or el.text
                         raw_text = raw_text.strip()
-                        if raw_text:
+                        # Validamos que el texto realmente parezca un saldo numérico
+                        # (evita que un candidato "atrape" una celda vacía o irrelevante,
+                        # algo más probable con el XPath posicional fijo).
+                        if raw_text and re.search(r"\d", raw_text):
                             break
+                        raw_text = None
                     except TimeoutException:
                         continue
                 if raw_text:
@@ -107,6 +122,23 @@ class VivozProvider(BaseProvider):
                     time.sleep(0.5)
 
             if not raw_text:
+                # Último recurso antes del fallback HTTP: escanear todo el texto
+                # del panel Quick Stats en busca de "Balance ... <número>", sin
+                # depender de la posición exacta de filas/columnas. Más resistente
+                # a que la tabla cambie de forma por avisos/promos/alertas.
+                try:
+                    panel_text = driver.execute_script(
+                        "var p = document.getElementById('quick_stats') || "
+                        "document.getElementById('show_quick_stats'); "
+                        "return p ? p.innerText : '';"
+                    ) or ""
+                    match = re.search(r"(?:Balance|Saldo)[^\d\-+]{0,20}([-+]?\d[\d\.,]*)", panel_text, re.IGNORECASE)
+                    if match:
+                        raw_text = match.group(0).strip()
+                except Exception:
+                    pass
+
+            if not raw_text:
                 # Fallback vía HTTP (como en el original)
                 try:
                     import requests
@@ -114,7 +146,7 @@ class VivozProvider(BaseProvider):
                     for cookie in driver.get_cookies():
                         session.cookies.set(cookie['name'], cookie.get('value'), domain=cookie.get('domain') or '178.105.24.84')
                     resp = session.get("http://178.105.24.84/billing/callc/main_quick_stats", timeout=15)
-                    match = re.search(r'Balance:</td>\s*<td[^>]*>([^<]+)', resp.text, re.IGNORECASE)
+                    match = re.search(r'(?:Balance|Saldo):</td>\s*<td[^>]*>([^<]+)', resp.text, re.IGNORECASE)
                     if match:
                         raw_text = match.group(1).strip()
                 except Exception:
@@ -132,7 +164,8 @@ class VivozProvider(BaseProvider):
             else:
                 formatted = raw_text
 
-            google_sheet.update_cell(self.sheet_row, self.sheet_col, formatted)
+            if google_sheet is not None:
+                google_sheet.update_cell(self.sheet_row, self.sheet_col, formatted)
             return True, formatted
 
         except Exception as e:

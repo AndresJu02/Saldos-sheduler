@@ -990,8 +990,13 @@ def run_gui():
                         headless=False
                     )
                 except TypeError:
-                    ok, msg = False, ("Este proveedor todavía no admite modo visible "
-                                       "(falta actualizar su get_balance con el parámetro 'headless').")
+                    # Proveedor que aún no acepta 'headless' como parámetro
+                    # (p. ej. SipMovil/1980, que ya corren visibles de forma fija).
+                    ok, msg = provider.get_balance(
+                        test_cfg, None, "",
+                        driver_paths={"chrome_exe": chrome_exe, "chromedriver_exe": chromedriver_exe},
+                        get_driver_fn=get_robust_driver
+                    )
             except Exception as e:
                 ok, msg = False, str(e)
 

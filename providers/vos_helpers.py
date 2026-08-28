@@ -362,7 +362,8 @@ def run_site(driver, site_cfg, sheet, sheet_row):
             saldo_texto = (saldo_texto or "").strip()
             saldo_num = parse_balance(saldo_texto)
             saldo_fmt = format_cop_no_decimals(saldo_num)
-            sheet.update_cell(sheet_row, 4, saldo_fmt)
+            if sheet is not None:
+                sheet.update_cell(sheet_row, 4, saldo_fmt)
             print(f"Saldo guardado en D{sheet_row}: {saldo_fmt}")
             return
         else:
