@@ -57,9 +57,19 @@ CHROMEDRIVER_DIR = BASE_DIR / 'chromedriver-portable'
 
 DEFAULT_BALANCE_REGEX = r"[-+]?\d[\d\.,]*"
 
-CHROME_VERSION = "148.0.7778.217"
-CHROME_URL = f"https://storage.googleapis.com/chrome-for-testing-public/{CHROME_VERSION}/win64/chrome-win64.zip"
-CHROMEDRIVER_URL = f"https://storage.googleapis.com/chrome-for-testing-public/{CHROME_VERSION}/win64/chromedriver-win64.zip"
+# Versión "de respaldo" usada únicamente si la consulta a Chrome for Testing
+# fallara (sin internet, endpoint caído, etc.) y no hubiera nada instalado aún.
+CHROME_VERSION_FALLBACK = "148.0.7778.217"
+CHROME_URL_FALLBACK = f"https://storage.googleapis.com/chrome-for-testing-public/{CHROME_VERSION_FALLBACK}/win64/chrome-win64.zip"
+CHROMEDRIVER_URL_FALLBACK = f"https://storage.googleapis.com/chrome-for-testing-public/{CHROME_VERSION_FALLBACK}/win64/chromedriver-win64.zip"
+
+# Endpoint oficial de Google con la última versión estable "conocida como buena"
+# (Known Good Versions) de Chrome y ChromeDriver, siempre sincronizadas entre sí.
+CHROME_FOR_TESTING_JSON = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+
+# Caché en memoria (por proceso) de la última info consultada, para no golpear
+# el endpoint dos veces seguidas cuando se instalan Chrome y ChromeDriver juntos.
+_latest_stable_cache = None
 
 # ---------------------------------------------------------------------------
 # Configuración por defecto
@@ -116,37 +126,123 @@ def download_file(url, dest):
         for chunk in resp.iter_content(chunk_size=8192):
             f.write(chunk)
 
-def ensure_chrome():
+def get_latest_stable_info(use_cache=True):
+    """
+    Consulta el endpoint oficial de Chrome for Testing y devuelve
+    (version, chrome_url_win64, chromedriver_url_win64) del canal Stable.
+    Lanza una excepción si no se puede consultar (sin internet, etc.).
+    """
+    global _latest_stable_cache
+    if use_cache and _latest_stable_cache is not None:
+        return _latest_stable_cache
+
+    import requests
+    resp = requests.get(CHROME_FOR_TESTING_JSON, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    stable = data["channels"]["Stable"]
+    version = stable["version"]
+    chrome_url = next(d["url"] for d in stable["downloads"]["chrome"] if d["platform"] == "win64")
+    chromedriver_url = next(d["url"] for d in stable["downloads"]["chromedriver"] if d["platform"] == "win64")
+
+    _latest_stable_cache = (version, chrome_url, chromedriver_url)
+    return _latest_stable_cache
+
+
+def _read_version_marker(dir_path: Path):
+    marker = dir_path / 'VERSION.txt'
+    if marker.exists():
+        try:
+            return marker.read_text(encoding='utf-8').strip()
+        except Exception:
+            return None
+    return None
+
+
+def _write_version_marker(dir_path: Path, version: str):
+    try:
+        (dir_path / 'VERSION.txt').write_text(version, encoding='utf-8')
+    except Exception:
+        pass
+
+
+def get_installed_versions():
+    """Devuelve (version_chrome, version_chromedriver) instaladas actualmente, o None si no hay."""
+    return _read_version_marker(CHROME_DIR), _read_version_marker(CHROMEDRIVER_DIR)
+
+
+def _robust_rmtree(path: Path, retries=6, delay=1.0):
+    """
+    Borra un directorio reintentando si algún archivo está bloqueado
+    (chrome.dll en uso, antivirus escaneando, etc.). Antes del primer
+    intento mata procesos huérfanos de chrome/chromedriver que puedan
+    tener el archivo abierto.
+    """
+    if not path.exists():
+        return
+    cleanup_orphans()
+    last_err = None
+    for attempt in range(retries):
+        try:
+            shutil.rmtree(path)
+            return
+        except PermissionError as e:
+            last_err = e
+            if attempt == 0:
+                cleanup_orphans()
+            time.sleep(delay)
+        except FileNotFoundError:
+            return
+    raise PermissionError(
+        f"No se pudo borrar '{path}' tras {retries} intentos "
+        f"(probablemente un proceso de Chrome sigue en ejecución): {last_err}"
+    )
+
+
+def ensure_chrome(force=False):
     chrome_exe = CHROME_DIR / 'chrome-win64' / 'chrome.exe'
-    if chrome_exe.exists():
+    if chrome_exe.exists() and not force:
         return str(chrome_exe)
+
     logger.info("Instalando Chrome portable...")
+    try:
+        version, chrome_url, _ = get_latest_stable_info()
+    except Exception as e:
+        logger.warning(f"No se pudo consultar la última versión de Chrome ({e}); usando versión de respaldo.")
+        version, chrome_url = CHROME_VERSION_FALLBACK, CHROME_URL_FALLBACK
+
     zip_path = BASE_DIR / 'chrome.zip'
-    download_file(CHROME_URL, zip_path)
-    shutil.rmtree(CHROME_DIR, ignore_errors=True)
+    download_file(chrome_url, zip_path)
+    _robust_rmtree(CHROME_DIR)
     CHROME_DIR.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as zf:
         zf.extractall(CHROME_DIR)
     zip_path.unlink()
-    logger.info("Chrome instalado.")
+    _write_version_marker(CHROME_DIR, version)
+    logger.info(f"Chrome {version} instalado.")
     return str(chrome_exe)
 
-def ensure_chromedriver():
+def ensure_chromedriver(force=False):
     driver_exe = CHROMEDRIVER_DIR / 'chromedriver.exe'
-    if driver_exe.exists():
+    if driver_exe.exists() and not force:
         return str(driver_exe)
 
     logger.info("Instalando ChromeDriver...")
+    try:
+        version, _, chromedriver_url = get_latest_stable_info()
+    except Exception as e:
+        logger.warning(f"No se pudo consultar la última versión de ChromeDriver ({e}); usando versión de respaldo.")
+        version, chromedriver_url = CHROME_VERSION_FALLBACK, CHROMEDRIVER_URL_FALLBACK
+
     zip_path = BASE_DIR / 'chromedriver.zip'
     if zip_path.exists():
         zip_path.unlink()
-    if CHROMEDRIVER_DIR.exists():
-        shutil.rmtree(CHROMEDRIVER_DIR, ignore_errors=True)
+    _robust_rmtree(CHROMEDRIVER_DIR)
 
-    download_file(CHROMEDRIVER_URL, zip_path)
+    download_file(chromedriver_url, zip_path)
 
     temp_extract = CHROMEDRIVER_DIR.parent / 'chromedriver_temp'
-    shutil.rmtree(temp_extract, ignore_errors=True)
+    _robust_rmtree(temp_extract)
     temp_extract.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -172,10 +268,26 @@ def ensure_chromedriver():
     if extracted != driver_exe:
         shutil.move(str(extracted), str(driver_exe))
 
-    shutil.rmtree(temp_extract, ignore_errors=True)
+    _robust_rmtree(temp_extract)
     zip_path.unlink()
-    logger.info("ChromeDriver instalado correctamente.")
+    _write_version_marker(CHROMEDRIVER_DIR, version)
+    logger.info(f"ChromeDriver {version} instalado correctamente.")
     return str(driver_exe)
+
+
+def update_chrome_stack():
+    """
+    Fuerza la reinstalación de Chrome + ChromeDriver con la última versión
+    estable disponible. Pensado para llamarse desde un hilo aparte (GUI).
+    Devuelve (version, chrome_exe, chromedriver_exe).
+    """
+    global _latest_stable_cache
+    cleanup_orphans()  # cierra chrome/chromedriver colgados ANTES de intentar borrar
+    _latest_stable_cache = None  # invalida caché para forzar consulta fresca
+    version, _, _ = get_latest_stable_info(use_cache=False)
+    chrome_exe = ensure_chrome(force=True)
+    chromedriver_exe = ensure_chromedriver(force=True)
+    return version, chrome_exe, chromedriver_exe
 
 def cleanup_orphans():
     """Mata procesos de chrome (solo de la carpeta portable) y chromedriver que estén colgados."""
@@ -1254,6 +1366,56 @@ def run_gui():
     ttk.Label(row_url, text="URL:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
     ttk.Entry(row_url, textvariable=sheet_url_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
     ttk.Button(row_url, text="Guardar URL", command=guardar_url, style="Accent.TButton").pack(side="left", padx=3)
+
+    # ---------------- ChromeDriver / Chrome ----------------
+    driver_frame = ttk.LabelFrame(tab_config, text="🧭  Chrome / ChromeDriver", padding=15)
+    driver_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+    def _version_label_text():
+        v_chrome, v_driver = get_installed_versions()
+        v_chrome = v_chrome or "no instalado"
+        v_driver = v_driver or "no instalado"
+        return f"Chrome: {v_chrome}      ChromeDriver: {v_driver}"
+
+    driver_version_var = tk.StringVar(value=_version_label_text())
+
+    def actualizar_chromedriver():
+        respuesta = messagebox.askyesno(
+            "Actualizar ChromeDriver",
+            "Esto descargará la última versión estable de Chrome portable y "
+            "ChromeDriver, reemplazando la instalación actual.\n\n¿Continuar?"
+        )
+        if not respuesta:
+            return
+
+        btn_actualizar_driver.config(state="disabled", text="Actualizando...")
+        driver_version_var.set("Consultando última versión disponible...")
+
+        def tarea():
+            try:
+                version, _, _ = update_chrome_stack()
+                root.after(0, lambda: (
+                    driver_version_var.set(_version_label_text()),
+                    messagebox.showinfo("Actualizado", f"Chrome y ChromeDriver actualizados a la versión {version}.")
+                ))
+            except Exception as e:
+                root.after(0, lambda: (
+                    driver_version_var.set(_version_label_text()),
+                    messagebox.showerror("Error", f"No se pudo actualizar ChromeDriver:\n{e}")
+                ))
+            finally:
+                root.after(0, lambda: btn_actualizar_driver.config(state="normal", text="Actualizar a la última versión"))
+
+        threading.Thread(target=tarea, daemon=True).start()
+
+    row_driver = ttk.Frame(driver_frame)
+    row_driver.pack(fill="x")
+    ttk.Label(row_driver, textvariable=driver_version_var).pack(side="left", padx=(0, 10))
+    btn_actualizar_driver = ttk.Button(
+        row_driver, text="Actualizar a la última versión",
+        command=actualizar_chromedriver, style="Accent.TButton"
+    )
+    btn_actualizar_driver.pack(side="right", padx=3)
 
     # ====================== BARRA INFERIOR ======================
     bottom = ttk.Frame(root)
