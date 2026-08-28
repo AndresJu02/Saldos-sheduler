@@ -15,11 +15,11 @@ class CityphoneProvider(BaseProvider):
         {"key": "url", "label": "URL", "type": "str", "default": "https://www.voip-llamada.com/voip/"},
     ]
 
-    def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None):
+    def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None, headless=True):
         chrome_exe = driver_paths["chrome_exe"]
         chromedriver_exe = driver_paths["chromedriver_exe"]
 
-        driver = get_driver_fn(chrome_exe, chromedriver_exe, headless=True) if get_driver_fn else None
+        driver = get_driver_fn(chrome_exe, chromedriver_exe, headless=headless) if get_driver_fn else None
         if not driver:
             return False, "No se pudo crear el driver"
 
@@ -67,6 +67,10 @@ class CityphoneProvider(BaseProvider):
             return True, formatted
 
         except Exception as e:
+            try:
+                self.save_debug_snapshot(driver, "excepcion")
+            except Exception:
+                pass
             return False, str(e)
         finally:
             driver.quit()

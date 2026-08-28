@@ -526,19 +526,44 @@ def run_balance_cycle(config: dict):
             provider.sheet_col = int(prov_cfg['sheet_col'])
 
         print(f"\nProcesando {provider.name}...", flush=True)
-        try:
-            success, msg = provider.get_balance(
-                final_cfg, sh, config['google_sheet_url'],
-                driver_paths={"chrome_exe": chrome_exe, "chromedriver_exe": chromedriver_exe},
-                get_driver_fn=get_robust_driver
-            )
+
+        visibles = [str(v).strip() for v in config.get("visible_providers", [])]
+        quiere_visible = provider.name in visibles
+
+        MAX_INTENTOS = 2
+        success, msg = False, ""
+        for intento in range(1, MAX_INTENTOS + 1):
+            try:
+                success, msg = provider.get_balance(
+                    final_cfg, sh, config['google_sheet_url'],
+                    driver_paths={"chrome_exe": chrome_exe, "chromedriver_exe": chromedriver_exe},
+                    get_driver_fn=get_robust_driver,
+                    headless=not quiere_visible
+                )
+            except TypeError:
+                # Este proveedor todavía no acepta el kwarg 'headless'
+                # (p. ej. providers viejos sin actualizar).
+                try:
+                    success, msg = provider.get_balance(
+                        final_cfg, sh, config['google_sheet_url'],
+                        driver_paths={"chrome_exe": chrome_exe, "chromedriver_exe": chromedriver_exe},
+                        get_driver_fn=get_robust_driver
+                    )
+                except Exception as e:
+                    success, msg = False, str(e)
+            except Exception as e:
+                success, msg = False, str(e)
+
             if success:
-                print(f"  ✅ {provider.name} -> OK ({msg})", flush=True)
-            else:
-                print(f"  ❌ {provider.name} -> FALLO: {msg}", flush=True)
-        except Exception as e:
-            print(f"  ❌ {provider.name} -> EXCEPCIÓN: {e}", flush=True)
-            traceback.print_exc()
+                break
+            if intento < MAX_INTENTOS:
+                print(f"  ⚠️  {provider.name} -> intento {intento} falló ({msg}); reintentando...", flush=True)
+                time.sleep(2)
+
+        if success:
+            print(f"  ✅ {provider.name} -> OK ({msg})", flush=True)
+        else:
+            print(f"  ❌ {provider.name} -> FALLO tras {MAX_INTENTOS} intento(s): {msg}", flush=True)
 
     print("\n" + "=" * 50, flush=True)
     print("  TODAS LAS TAREAS COMPLETADAS", flush=True)
@@ -745,12 +770,18 @@ def run_gui():
     main_frame = ttk.Frame(tab_prov)
     main_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-    columns = ("Proveedor",)
+    # Proveedores que SIEMPRE corren en modo visible por requerir intervención
+    # visual obligatoria (captcha), y por lo tanto no aplica alternar la opción.
+    PROVEEDORES_VISIBLE_FORZADO = {"SipMovil", "1980"}
+
+    columns = ("Proveedor", "Visible")
     tree = ttk.Treeview(main_frame, columns=columns, show="tree headings", selectmode="extended")
     tree.heading("#0", text="Estado")
     tree.heading("Proveedor", text="Proveedor")
+    tree.heading("Visible", text="Visible")
     tree.column("#0", width=60, anchor="center")
-    tree.column("Proveedor", width=250, anchor="w")
+    tree.column("Proveedor", width=230, anchor="w")
+    tree.column("Visible", width=70, anchor="center")
     tree.pack(side="left", fill="both", expand=True)
 
     scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=tree.yview)
@@ -765,10 +796,17 @@ def run_gui():
         providers = get_all_providers()
         providers = sort_providers_by_order(providers, config)
         enabled = [str(e).strip() for e in config.get("enabled_providers", [])]
+        visibles = [str(v).strip() for v in config.get("visible_providers", [])]
         for p in providers:
             nombre_limpio = str(p.name).strip()
             icon = "✓" if nombre_limpio in enabled else "✗"
-            tree.insert("", "end", text=icon, values=(nombre_limpio,))
+            if nombre_limpio in PROVEEDORES_VISIBLE_FORZADO:
+                icono_visible = "👁 (fijo)"
+            elif nombre_limpio in visibles:
+                icono_visible = "👁"
+            else:
+                icono_visible = "—"
+            tree.insert("", "end", text=icon, values=(nombre_limpio, icono_visible))
 
     refresh_tree()
 
@@ -869,6 +907,104 @@ def run_gui():
             for child in tree.get_children():
                 if str(tree.item(child)["values"][0]).strip() == nombre:
                     tree.selection_add(child)
+
+    def toggle_visible():
+        """Alterna el modo 'visible' (headless=False) para los proveedores
+        seleccionados. No aplica a los que requieren captcha (SipMovil, 1980),
+        ya que esos siempre corren visibles de forma fija."""
+        selecciones = tree.selection()
+        if not selecciones:
+            messagebox.showinfo("Seleccionar", "Seleccione al menos un proveedor.")
+            return
+
+        nombres_seleccionados = []
+        for sel in selecciones:
+            nombre = str(tree.item(sel)["values"][0]).strip()
+            if nombre in PROVEEDORES_VISIBLE_FORZADO:
+                continue
+            nombres_seleccionados.append(nombre)
+
+        if not nombres_seleccionados:
+            messagebox.showinfo(
+                "No aplica",
+                "Los proveedores seleccionados ya corren siempre en modo visible "
+                "(requieren captcha) y no se pueden alternar."
+            )
+            return
+
+        visibles = [str(v).strip() for v in config.get("visible_providers", [])]
+        activar = nombres_seleccionados[0] not in visibles
+
+        for nombre in nombres_seleccionados:
+            if activar:
+                if nombre not in visibles:
+                    visibles.append(nombre)
+            else:
+                if nombre in visibles:
+                    visibles.remove(nombre)
+
+        config["visible_providers"] = visibles
+        save_config(config)
+        refresh_tree()
+
+        for nombre in nombres_seleccionados:
+            for child in tree.get_children():
+                if str(tree.item(child)["values"][0]).strip() == nombre:
+                    tree.selection_add(child)
+
+    def probar_ahora_seleccionado():
+        """Corre el proveedor seleccionado (predeterminado o personalizado)
+        una sola vez, en modo visible, para poder ver el paso a paso y
+        diagnosticar visualmente el error."""
+        selecciones = tree.selection()
+        if not selecciones:
+            messagebox.showinfo("Seleccionar", "Seleccione un proveedor primero.")
+            return
+        if not Path(config.get("credentials_path", "")).exists():
+            messagebox.showerror("Error", "Configura primero las credenciales de Google (pestaña Configuración).")
+            return
+
+        nombre = str(tree.item(selecciones[0])["values"][0]).strip()
+        provider = next((p for p in get_all_providers() if str(p.name).strip() == nombre), None)
+        if not provider:
+            return
+
+        prov_cfg = config.get("providers_config", {}).get(provider.name, {})
+        test_cfg = {}
+        for field in provider.config_fields:
+            key = field["key"]
+            test_cfg[key] = prov_cfg.get(key, field.get("default", ""))
+
+        btn_probar_sel.config(state="disabled", text="Probando...")
+        root.update_idletasks()
+
+        def tarea():
+            try:
+                chrome_exe = ensure_chrome()
+                chromedriver_exe = ensure_chromedriver()
+                try:
+                    ok, msg = provider.get_balance(
+                        test_cfg, None, "",
+                        driver_paths={"chrome_exe": chrome_exe, "chromedriver_exe": chromedriver_exe},
+                        get_driver_fn=get_robust_driver,
+                        headless=False
+                    )
+                except TypeError:
+                    ok, msg = False, ("Este proveedor todavía no admite modo visible "
+                                       "(falta actualizar su get_balance con el parámetro 'headless').")
+            except Exception as e:
+                ok, msg = False, str(e)
+
+            def mostrar():
+                btn_probar_sel.config(state="normal", text="🧪  Probar ahora (visible)")
+                if ok:
+                    messagebox.showinfo("Prueba exitosa", f"Saldo detectado: {msg}\n\n"
+                                         "(No se escribió en la hoja, esto fue solo una prueba.)")
+                else:
+                    messagebox.showerror("Prueba fallida", f"No se pudo leer el saldo:\n{msg}")
+            root.after(0, mostrar)
+
+        threading.Thread(target=tarea, daemon=True).start()
 
     def mover_arriba():
         selecciones = tree.selection()
@@ -1247,6 +1383,9 @@ def run_gui():
 
     ttk.Button(btn_panel, text="⚙  Configurar", command=configurar_proveedor, style="Accent.TButton", width=20).pack(pady=4, fill="x")
     ttk.Button(btn_panel, text="↻  Habilitar / Deshab.", command=toggle_proveedor, width=20).pack(pady=4, fill="x")
+    ttk.Button(btn_panel, text="👁  Visible / Oculto", command=toggle_visible, width=20).pack(pady=4, fill="x")
+    btn_probar_sel = ttk.Button(btn_panel, text="🧪  Probar ahora (visible)", command=probar_ahora_seleccionado, width=20)
+    btn_probar_sel.pack(pady=4, fill="x")
     ttk.Button(btn_panel, text="＋  Agregar proveedor", command=agregar_proveedor, width=20).pack(pady=4, fill="x")
     ttk.Button(btn_panel, text="✎  Editar proveedor", command=editar_proveedor, width=20).pack(pady=4, fill="x")
     ttk.Button(btn_panel, text="🗑  Eliminar proveedor", command=eliminar_proveedor, width=20).pack(pady=4, fill="x")

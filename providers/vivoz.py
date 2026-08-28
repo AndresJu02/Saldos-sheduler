@@ -17,13 +17,13 @@ class VivozProvider(BaseProvider):
         {"key": "url", "label": "URL", "type": "str", "default": "http://178.105.24.84/billing/"},
     ]
 
-    def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None):
+    def get_balance(self, config, google_sheet, sheet_url, driver_paths, get_driver_fn=None, headless=True):
         chrome_exe = driver_paths["chrome_exe"]
         chromedriver_exe = driver_paths["chromedriver_exe"]
 
         # Usar la función robusta (si se proporcionó) o crear un driver simple
         if get_driver_fn:
-            driver = get_driver_fn(chrome_exe, chromedriver_exe, headless=True)
+            driver = get_driver_fn(chrome_exe, chromedriver_exe, headless=headless)
         else:
             # Fallback mínimo si no se pasó la función (no recomendado)
             from selenium import webdriver
@@ -31,7 +31,8 @@ class VivozProvider(BaseProvider):
             from selenium.webdriver.chrome.options import Options
             opts = Options()
             opts.binary_location = chrome_exe
-            opts.add_argument("--headless=new")
+            if headless:
+                opts.add_argument("--headless=new")
             opts.add_argument("--no-sandbox")
             service = Service(executable_path=chromedriver_exe)
             driver = webdriver.Chrome(service=service, options=opts)
@@ -51,7 +52,7 @@ class VivozProvider(BaseProvider):
 
             # Esperar Quick Stats
             try:
-                WebDriverWait(driver, 40).until(
+                WebDriverWait(driver, 20).until(
                     EC.any_of(
                         EC.element_to_be_clickable((By.ID, "qs_refresh")),
                         EC.presence_of_element_located((By.XPATH, "//*[contains(., 'Quick Stats') or contains(., 'Balance')]"))
@@ -120,6 +121,7 @@ class VivozProvider(BaseProvider):
                     pass
 
             if not raw_text:
+                self.save_debug_snapshot(driver, "sin_balance")
                 return False, "No se encontró el balance"
 
             # Formatear
@@ -134,6 +136,10 @@ class VivozProvider(BaseProvider):
             return True, formatted
 
         except Exception as e:
+            try:
+                self.save_debug_snapshot(driver, "excepcion")
+            except Exception:
+                pass
             return False, str(e)
         finally:
             driver.quit()

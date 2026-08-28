@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple
+from pathlib import Path
+import time
+
 
 class BaseProvider(ABC):
     # Nombre que aparecerá en la interfaz
@@ -24,3 +27,20 @@ class BaseProvider(ABC):
         Si tiene éxito, debe actualizar la celda correspondiente en la hoja.
         """
         pass
+
+    def save_debug_snapshot(self, driver, motivo: str = "sin_balance"):
+        """
+        Guarda un screenshot (.png) y el HTML de la página (.html) en
+        debug/<NombreProveedor>/ con timestamp, para poder diagnosticar
+        fallos intermitentes que ocurrieron en corridas desatendidas.
+        No lanza excepciones: si algo falla, simplemente no deja evidencia.
+        """
+        try:
+            carpeta = Path("debug") / self.name
+            carpeta.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            base = carpeta / f"{ts}_{motivo}"
+            driver.save_screenshot(str(base.with_suffix(".png")))
+            base.with_suffix(".html").write_text(driver.page_source, encoding="utf-8")
+        except Exception:
+            pass
