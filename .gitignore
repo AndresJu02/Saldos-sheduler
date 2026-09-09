@@ -17,3 +17,7 @@ __pycache__/
 # Chrome portable y chromedriver (se descargan solos)
 chrome-portable/
 chromedriver-portable/
+
+# Estado y registros generados por el monitor de Cargas VOIP
+estado_cargas_voip.json
+registro_cargas.csv

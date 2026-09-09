@@ -7,6 +7,7 @@ Aplicación unificada de saldos.
 """
 from remote_lock import verificar_bloqueo
 import os
+import re
 import sys
 import json
 import importlib
@@ -84,7 +85,22 @@ DEFAULT_CONFIG = {
     "credentials_path": str(CREDENTIALS_FILE),
     "enabled_providers": [],
     "providers_config": {},
-    "provider_order": []
+    "provider_order": [],
+    "cargas_voip_config": {
+        "bitrix_webhook_url": "",
+        "chat_id": "chat135",
+        "poll_interval": 20,
+        "tolerancia_pct": 0.5,
+        "tolerancia_trm_pct": 0.1,
+        "tesseract_cmd": "",
+        "debug_ocr": True
+    },
+    "auto_like_tickets_config": {
+        "bitrix_webhook_url": "",
+        "tickets_chat_id": "chat97",
+        "mi_user_id": "13",
+        "poll_interval": 20
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -314,6 +330,113 @@ def cleanup_orphans():
                     logger.info(f"Limpieza: chrome portable (PID {proc.info['pid']}) terminado.")
         except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
             continue
+
+# ---------------------------------------------------------------------------
+# Tesseract OCR (usado por el monitor de Cargas VOIP)
+# ---------------------------------------------------------------------------
+TESSERACT_RELEASES_API = "https://api.github.com/repos/tesseract-ocr/tesseract/releases/latest"
+TESSERACT_ASSET_RE = re.compile(r"^tesseract-ocr-w64-setup-.*\.exe$", re.IGNORECASE)
+
+# Versión "de respaldo" usada únicamente si la consulta a la API de GitHub
+# fallara (sin internet, límite de peticiones, cambio de nombre del asset).
+TESSERACT_FALLBACK_VERSION = "5.5.3"
+TESSERACT_FALLBACK_URL = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe"
+
+
+def get_latest_tesseract_installer():
+    """
+    Consulta el último release publicado en GitHub (tesseract-ocr/tesseract)
+    y devuelve (version, url) del instalador para Windows x64. Como el
+    proyecto sube el instalador como un asset de cada release (no una URL
+    fija), consultar 'releases/latest' evita tener que actualizar a mano
+    el link cada vez que sale una versión nueva. Si la consulta falla,
+    cae a una versión de respaldo fija (puede haber quedado desactualizada).
+    """
+    import requests
+    try:
+        resp = requests.get(
+            TESSERACT_RELEASES_API, timeout=20,
+            headers={"Accept": "application/vnd.github+json"}
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        version = data.get("tag_name", "").strip() or "desconocida"
+        asset = next(
+            (a for a in data.get("assets", []) if TESSERACT_ASSET_RE.match(a.get("name", ""))),
+            None
+        )
+        if not asset:
+            raise ValueError("El último release no trae un instalador 'tesseract-ocr-w64-setup-*.exe'.")
+        return version, asset["browser_download_url"]
+    except Exception as e:
+        logger.warning(f"No se pudo consultar la última versión de Tesseract ({e}); usando versión de respaldo.")
+        return TESSERACT_FALLBACK_VERSION, TESSERACT_FALLBACK_URL
+
+
+def find_tesseract_exe(configured_path: str = ""):
+    """Busca tesseract.exe: primero la ruta configurada a mano (si sigue
+    existiendo), luego el PATH del sistema, luego las ubicaciones típicas
+    donde lo deja el instalador oficial."""
+    if configured_path and Path(configured_path).is_file():
+        return configured_path
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    for candidate in (
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def install_tesseract(progress_cb=None):
+    """
+    Descarga el instalador oficial más reciente de Tesseract y lo ejecuta.
+    Intenta una instalación silenciosa (switches típicos de Inno Setup, que
+    es lo que usa este instalador); Windows igual mostrará el aviso de
+    permisos de administrador (UAC), ya que instala en Program Files.
+    Si por algún motivo el instalador no reconoce esos switches, los
+    ignora y simplemente abre su asistente normal.
+
+    Devuelve (version, ruta_tesseract_exe_o_None).
+    """
+    def log(msg):
+        logger.info(msg)
+        if progress_cb:
+            progress_cb(msg)
+
+    version, url = get_latest_tesseract_installer()
+    log(f"Descargando instalador de Tesseract {version}...")
+
+    installer_path = BASE_DIR / "tesseract-installer.exe"
+    download_file(url, installer_path)
+
+    log("Ejecutando instalador (puede pedir permisos de administrador)...")
+    try:
+        subprocess.run(
+            [
+                str(installer_path),
+                "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
+                r'/DIR=C:\Program Files\Tesseract-OCR',
+            ],
+            timeout=300,
+        )
+    finally:
+        try:
+            installer_path.unlink()
+        except Exception:
+            pass
+
+    exe_path = find_tesseract_exe()
+    if exe_path:
+        log(f"Tesseract {version} instalado en: {exe_path}")
+    else:
+        log("El instalador se ejecutó pero no se encontró tesseract.exe; "
+            "si se abrió el asistente, complétalo y vuelve a intentar.")
+    return version, exe_path
+
 
 # ---------------------------------------------------------------------------
 # Driver Selenium normal
@@ -746,6 +869,10 @@ def run_gui():
 
     scheduler_process = None
     scheduler_status_var = tk.StringVar(value="⚫  Detenido")
+    cargas_voip_process = None
+    cargas_voip_status_var = tk.StringVar(value="⚫  Detenido")
+    auto_like_process = None
+    auto_like_status_var = tk.StringVar(value="⚫  Detenido")
     config = load_config()
 
     def verificar_y_avisar():
@@ -1439,7 +1566,426 @@ def run_gui():
     )
 
     # ------------------------------------------------------------------
-    # 3. PESTAÑA CONFIGURACIÓN (credenciales + URL de Sheets)
+    # 3. PESTAÑA CARGAS VOIP (monitor Bitrix24 + OCR)
+    # ------------------------------------------------------------------
+    tab_cargas = ttk.Frame(notebook)
+    notebook.add(tab_cargas, text="   Cargas VOIP   ")
+
+    try:
+        import cargas_voip
+        cv_cfg = cargas_voip.load_cargas_voip_config()
+    except Exception:
+        cv_cfg = config.get("cargas_voip_config", {})
+
+    # La pestaña tiene varias secciones y no todas caben sin agrandar la
+    # ventana, así que se muestra dentro de un canvas con scrollbar vertical
+    # (mismo patrón que el formulario "Agregar proveedor").
+    cv_canvas = tk.Canvas(tab_cargas, bg=BG, highlightthickness=0)
+    cv_vscroll = ttk.Scrollbar(tab_cargas, orient="vertical", command=cv_canvas.yview)
+    cv_content = ttk.Frame(cv_canvas)
+    cv_content_window = cv_canvas.create_window((0, 0), window=cv_content, anchor="nw")
+    cv_content.bind("<Configure>", lambda e: cv_canvas.configure(scrollregion=cv_canvas.bbox("all")))
+    cv_canvas.bind("<Configure>", lambda e: cv_canvas.itemconfigure(cv_content_window, width=e.width))
+    cv_canvas.configure(yscrollcommand=cv_vscroll.set)
+    cv_canvas.pack(side="left", fill="both", expand=True)
+    cv_vscroll.pack(side="right", fill="y")
+
+    def _cv_on_mousewheel(event):
+        cv_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _cv_bind_mousewheel(_event=None):
+        cv_canvas.bind_all("<MouseWheel>", _cv_on_mousewheel)
+
+    def _cv_unbind_mousewheel(_event=None):
+        cv_canvas.unbind_all("<MouseWheel>")
+
+    cv_canvas.bind("<Enter>", _cv_bind_mousewheel)
+    cv_canvas.bind("<Leave>", _cv_unbind_mousewheel)
+
+    conexion_frame = ttk.LabelFrame(cv_content, text="🔌  Conexión Bitrix24", padding=15)
+    conexion_frame.pack(fill="x", padx=10, pady=(15, 10))
+
+    ttk.Label(conexion_frame, text="Webhook URL:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
+    cv_webhook_var = tk.StringVar(value=cv_cfg.get("bitrix_webhook_url", ""))
+    ttk.Entry(conexion_frame, textvariable=cv_webhook_var, width=55).grid(row=0, column=1, columnspan=3, padx=15, pady=5, sticky="we")
+
+    ttk.Label(conexion_frame, text="Chat ID:", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
+    cv_chat_var = tk.StringVar(value=cv_cfg.get("chat_id", "chat135"))
+    ttk.Entry(conexion_frame, textvariable=cv_chat_var, width=20).grid(row=1, column=1, padx=15, pady=5, sticky="w")
+    conexion_frame.columnconfigure(1, weight=1)
+
+    validacion_frame = ttk.LabelFrame(cv_content, text="✅  Validación", padding=15)
+    validacion_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+    ttk.Label(validacion_frame, text="Intervalo de sondeo (s):", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
+    cv_poll_var = tk.StringVar(value=str(cv_cfg.get("poll_interval", 20)))
+    ttk.Entry(validacion_frame, textvariable=cv_poll_var, width=10).grid(row=0, column=1, padx=15, pady=5, sticky="w")
+
+    ttk.Label(validacion_frame, text="Tolerancia monto USD (%):", font=("Segoe UI", 10, "bold")).grid(row=0, column=2, sticky="w", pady=5, padx=(20, 0))
+    cv_tol_var = tk.StringVar(value=str(cv_cfg.get("tolerancia_pct", 0.5)))
+    ttk.Entry(validacion_frame, textvariable=cv_tol_var, width=10).grid(row=0, column=3, padx=15, pady=5, sticky="w")
+
+    ttk.Label(validacion_frame, text="Tolerancia TRM (%):", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
+    cv_tol_trm_var = tk.StringVar(value=str(cv_cfg.get("tolerancia_trm_pct", 0.1)))
+    ttk.Entry(validacion_frame, textvariable=cv_tol_trm_var, width=10).grid(row=1, column=1, padx=15, pady=5, sticky="w")
+
+    ocr_frame = ttk.LabelFrame(cv_content, text="🔎  OCR (Tesseract)", padding=15)
+    ocr_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+    def seleccionar_tesseract():
+        path = filedialog.askopenfilename(
+            title="Seleccionar tesseract.exe",
+            filetypes=[("Ejecutable", "*.exe"), ("Todos", "*.*")]
+        )
+        if path:
+            cv_tesseract_var.set(path)
+            actualizar_estado_tesseract()
+
+    row_tess = ttk.Frame(ocr_frame)
+    row_tess.pack(fill="x")
+    ttk.Label(row_tess, text="Ruta tesseract.exe:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
+    cv_tesseract_var = tk.StringVar(value=cv_cfg.get("tesseract_cmd", ""))
+    ttk.Entry(row_tess, textvariable=cv_tesseract_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
+    ttk.Button(row_tess, text="Examinar", command=seleccionar_tesseract).pack(side="left", padx=3)
+
+    def actualizar_estado_tesseract():
+        found = find_tesseract_exe(cv_tesseract_var.get().strip())
+        if found:
+            cv_tesseract_status_var.set(f"✓  Detectado: {found}")
+            if not cv_tesseract_var.get().strip():
+                cv_tesseract_var.set(found)
+        else:
+            cv_tesseract_status_var.set("✗  No se detectó Tesseract OCR en este equipo.")
+
+    def descargar_instalar_tesseract():
+        respuesta = messagebox.askyesno(
+            "Descargar e instalar Tesseract",
+            "Esto descargará el instalador oficial más reciente de Tesseract OCR "
+            "desde GitHub (tesseract-ocr/tesseract) y lo ejecutará.\n\n"
+            "Windows pedirá permiso de administrador porque se instala en "
+            "'Program Files'. Acepta ese aviso para continuar.\n\n¿Continuar?"
+        )
+        if not respuesta:
+            return
+
+        btn_descargar_tesseract.config(state="disabled", text="Instalando...")
+        cv_tesseract_status_var.set("Consultando última versión disponible...")
+
+        def progreso(msg):
+            root.after(0, lambda: cv_tesseract_status_var.set(msg))
+
+        def tarea():
+            try:
+                version, exe_path = install_tesseract(progress_cb=progreso)
+
+                def terminar_ok():
+                    if exe_path:
+                        cv_tesseract_var.set(exe_path)
+                        config.setdefault("cargas_voip_config", {})["tesseract_cmd"] = exe_path
+                        save_config(config)
+                        actualizar_estado_tesseract()
+                        messagebox.showinfo(
+                            "Tesseract instalado",
+                            f"Tesseract {version} instalado correctamente.\nRuta guardada: {exe_path}"
+                        )
+                    else:
+                        actualizar_estado_tesseract()
+                        messagebox.showwarning(
+                            "Revisar instalación",
+                            "Se ejecutó el instalador pero no se pudo confirmar la instalación. "
+                            "Si se abrió su asistente, complétalo y vuelve a intentar."
+                        )
+                root.after(0, terminar_ok)
+            except Exception as e:
+                root.after(0, lambda: (
+                    actualizar_estado_tesseract(),
+                    messagebox.showerror("Error", f"No se pudo instalar Tesseract:\n{e}")
+                ))
+            finally:
+                root.after(0, lambda: btn_descargar_tesseract.config(state="normal", text="⬇  Descargar e instalar Tesseract"))
+
+        threading.Thread(target=tarea, daemon=True).start()
+
+    row_tess_estado = ttk.Frame(ocr_frame)
+    row_tess_estado.pack(fill="x", pady=(8, 0))
+    cv_tesseract_status_var = tk.StringVar(value="Comprobando...")
+    ttk.Label(row_tess_estado, textvariable=cv_tesseract_status_var, foreground="#9399b2",
+              font=("Segoe UI", 9)).pack(side="left")
+    btn_descargar_tesseract = ttk.Button(
+        row_tess_estado, text="⬇  Descargar e instalar Tesseract",
+        command=descargar_instalar_tesseract, style="Accent.TButton"
+    )
+    btn_descargar_tesseract.pack(side="right", padx=3)
+    actualizar_estado_tesseract()
+
+    aviso_ocr_obligatorio = ("El OCR es obligatorio para validar las capturas de carga: Tesseract debe "
+                              "estar instalado (usa el botón de arriba para descargarlo) antes de poder "
+                              "iniciar el monitor. El registro detallado de cada lectura queda siempre "
+                              "activado en 'cargas_voip.log'.")
+    ttk.Label(ocr_frame, text=aviso_ocr_obligatorio, foreground="#9399b2", wraplength=650,
+              justify="left", font=("Segoe UI", 9)).pack(anchor="w", pady=(14, 0))
+
+    def guardar_cargas_voip():
+        try:
+            poll_interval = int(cv_poll_var.get())
+        except ValueError:
+            messagebox.showerror("Error", "El intervalo de sondeo debe ser un número entero de segundos.")
+            return
+        try:
+            tolerancia_pct = float(cv_tol_var.get())
+            tolerancia_trm_pct = float(cv_tol_trm_var.get())
+        except ValueError:
+            messagebox.showerror("Error", "Las tolerancias deben ser números.")
+            return
+
+        config["cargas_voip_config"] = {
+            "bitrix_webhook_url": cv_webhook_var.get().strip(),
+            "chat_id": cv_chat_var.get().strip() or "chat135",
+            "poll_interval": poll_interval,
+            "tolerancia_pct": tolerancia_pct,
+            "tolerancia_trm_pct": tolerancia_trm_pct,
+            "tesseract_cmd": cv_tesseract_var.get().strip(),
+            "debug_ocr": True,
+        }
+        save_config(config)
+        messagebox.showinfo("Guardado", "Configuración de Cargas VOIP actualizada.")
+
+    ttk.Button(ocr_frame, text="💾  Guardar configuración", command=guardar_cargas_voip, style="Accent.TButton").pack(
+        anchor="e", pady=(15, 0)
+    )
+
+    # ---------------- Control del monitor ----------------
+    cv_control_frame = ttk.LabelFrame(cv_content, text="▶  Monitor", padding=15)
+    cv_control_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+    def cv_check_status():
+        nonlocal cargas_voip_process
+        if cargas_voip_process is not None:
+            if cargas_voip_process.poll() is None:
+                cargas_voip_status_var.set("🟢  En ejecución")
+                root.after(2000, cv_check_status)
+            else:
+                cargas_voip_process = None
+                cargas_voip_status_var.set("⚫  Detenido")
+                btn_cv_iniciar.config(state=tk.NORMAL)
+                btn_cv_detener.config(state=tk.DISABLED)
+
+    def cv_iniciar():
+        nonlocal cargas_voip_process
+        if cargas_voip_process is not None:
+            messagebox.showinfo("Cargas VOIP", "El monitor ya está en ejecución.")
+            return
+        if not config.get("cargas_voip_config", {}).get("bitrix_webhook_url", "").strip():
+            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 y guarda los cambios.")
+            return
+        if not find_tesseract_exe(config.get("cargas_voip_config", {}).get("tesseract_cmd", "")):
+            messagebox.showerror(
+                "Tesseract requerido",
+                "El OCR es obligatorio para validar las capturas: instala Tesseract con el botón "
+                "'⬇  Descargar e instalar Tesseract' antes de iniciar el monitor."
+            )
+            return
+
+        cargas_voip_process = subprocess.Popen(
+            _get_launch_cmd(['--cargas-voip']),
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+        cargas_voip_status_var.set("🟢  En ejecución")
+        btn_cv_iniciar.config(state=tk.DISABLED)
+        btn_cv_detener.config(state=tk.NORMAL)
+        messagebox.showinfo("Cargas VOIP", "Monitor iniciado en segundo plano.\nRevisa 'cargas_voip.log' para ver la actividad.")
+        root.after(2000, cv_check_status)
+
+    def cv_detener():
+        nonlocal cargas_voip_process
+        if cargas_voip_process is None:
+            return
+        try:
+            cargas_voip_process.terminate()
+            cargas_voip_process.wait(timeout=5)
+        except Exception:
+            try:
+                cargas_voip_process.kill()
+            except Exception:
+                pass
+        cargas_voip_process = None
+        cargas_voip_status_var.set("⚫  Detenido")
+        btn_cv_iniciar.config(state=tk.NORMAL)
+        btn_cv_detener.config(state=tk.DISABLED)
+        messagebox.showinfo("Cargas VOIP", "Monitor detenido.")
+
+    def cv_ver_registro():
+        csv_path = BASE_DIR / "registro_cargas.csv"
+        if not csv_path.exists():
+            messagebox.showinfo("Registro", "Todavía no se ha generado 'registro_cargas.csv'.")
+            return
+        os.startfile(str(csv_path))
+
+    def cv_ver_log():
+        log_path = BASE_DIR / "cargas_voip.log"
+        if not log_path.exists():
+            messagebox.showinfo("Log", "Todavía no se ha generado 'cargas_voip.log'.")
+            return
+        os.startfile(str(log_path))
+
+    cv_btn_row = ttk.Frame(cv_control_frame)
+    cv_btn_row.pack(fill="x")
+
+    btn_cv_iniciar = ttk.Button(cv_btn_row, text="▶  Iniciar Monitor", command=cv_iniciar, style="Accent.TButton")
+    btn_cv_iniciar.pack(side="left", padx=3)
+
+    btn_cv_detener = ttk.Button(cv_btn_row, text="⏹  Detener Monitor", command=cv_detener, state="disabled")
+    btn_cv_detener.pack(side="left", padx=3)
+
+    ttk.Label(cv_btn_row, textvariable=cargas_voip_status_var, foreground=ACCENT, font=("Segoe UI", 10, "bold")).pack(side="left", padx=15)
+
+    ttk.Button(cv_btn_row, text="📄  Ver registro (CSV)", command=cv_ver_registro).pack(side="right", padx=3)
+    ttk.Button(cv_btn_row, text="🗒  Ver log", command=cv_ver_log).pack(side="right", padx=3)
+
+    # ------------------------------------------------------------------
+    # 4. PESTAÑA TICKETS (auto-like de tickets asignados)
+    # ------------------------------------------------------------------
+    tab_tickets = ttk.Frame(notebook)
+    notebook.add(tab_tickets, text="   Tickets   ")
+
+    try:
+        import auto_like_tickets
+        al_cfg = auto_like_tickets.load_auto_like_config()
+    except Exception:
+        al_cfg = config.get("auto_like_tickets_config", {})
+
+    # Por comodidad, si todavía no se configuró un Webhook propio para
+    # Tickets, se sugiere el mismo que ya esté guardado para Cargas VOIP
+    # (normalmente es la misma cuenta de Bitrix24).
+    if not al_cfg.get("bitrix_webhook_url"):
+        al_cfg["bitrix_webhook_url"] = config.get("cargas_voip_config", {}).get("bitrix_webhook_url", "")
+
+    al_conexion_frame = ttk.LabelFrame(tab_tickets, text="🔌  Conexión Bitrix24", padding=15)
+    al_conexion_frame.pack(fill="x", padx=10, pady=(15, 10))
+
+    ttk.Label(al_conexion_frame, text="Webhook URL:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
+    al_webhook_var = tk.StringVar(value=al_cfg.get("bitrix_webhook_url", ""))
+    ttk.Entry(al_conexion_frame, textvariable=al_webhook_var, width=55).grid(row=0, column=1, columnspan=3, padx=15, pady=5, sticky="we")
+
+    ttk.Label(al_conexion_frame, text="Chat de tickets (ID):", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
+    al_chat_var = tk.StringVar(value=al_cfg.get("tickets_chat_id", "chat97"))
+    ttk.Entry(al_conexion_frame, textvariable=al_chat_var, width=20).grid(row=1, column=1, padx=15, pady=5, sticky="w")
+
+    ttk.Label(al_conexion_frame, text="Mi User ID:", font=("Segoe UI", 10, "bold")).grid(row=1, column=2, sticky="w", pady=5, padx=(20, 0))
+    al_user_var = tk.StringVar(value=str(al_cfg.get("mi_user_id", "13")))
+    ttk.Entry(al_conexion_frame, textvariable=al_user_var, width=10).grid(row=1, column=3, padx=15, pady=5, sticky="w")
+    al_conexion_frame.columnconfigure(1, weight=1)
+
+    ttk.Label(al_conexion_frame, text="Intervalo de sondeo (s):", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=5)
+    al_poll_var = tk.StringVar(value=str(al_cfg.get("poll_interval", 20)))
+    ttk.Entry(al_conexion_frame, textvariable=al_poll_var, width=10).grid(row=2, column=1, padx=15, pady=5, sticky="w")
+
+    aviso_tickets = ("Cuando llegue al chat un mensaje con el formato "
+                      "\"ticket <número> asignado a [USER=<id>]...\" y el <id> coincida con "
+                      "'Mi User ID', la aplicación le da like automáticamente. No reacciona a "
+                      "ningún otro tipo de mensaje del chat.")
+    ttk.Label(al_conexion_frame, text=aviso_tickets, foreground="#9399b2", wraplength=650,
+              justify="left", font=("Segoe UI", 9)).grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 0))
+
+    def guardar_tickets():
+        try:
+            poll_interval = int(al_poll_var.get())
+        except ValueError:
+            messagebox.showerror("Error", "El intervalo de sondeo debe ser un número entero de segundos.")
+            return
+        if not al_user_var.get().strip():
+            messagebox.showerror("Error", "Indica tu User ID de Bitrix24.")
+            return
+
+        config["auto_like_tickets_config"] = {
+            "bitrix_webhook_url": al_webhook_var.get().strip(),
+            "tickets_chat_id": al_chat_var.get().strip() or "chat97",
+            "mi_user_id": al_user_var.get().strip(),
+            "poll_interval": poll_interval,
+        }
+        save_config(config)
+        messagebox.showinfo("Guardado", "Configuración de Tickets actualizada.")
+
+    ttk.Button(al_conexion_frame, text="💾  Guardar configuración", command=guardar_tickets, style="Accent.TButton").grid(
+        row=4, column=3, pady=(15, 0), sticky="e"
+    )
+
+    # ---------------- Control del monitor ----------------
+    al_control_frame = ttk.LabelFrame(tab_tickets, text="▶  Monitor", padding=15)
+    al_control_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+    def al_check_status():
+        nonlocal auto_like_process
+        if auto_like_process is not None:
+            if auto_like_process.poll() is None:
+                auto_like_status_var.set("🟢  En ejecución")
+                root.after(2000, al_check_status)
+            else:
+                auto_like_process = None
+                auto_like_status_var.set("⚫  Detenido")
+                btn_al_iniciar.config(state=tk.NORMAL)
+                btn_al_detener.config(state=tk.DISABLED)
+
+    def al_iniciar():
+        nonlocal auto_like_process
+        if auto_like_process is not None:
+            messagebox.showinfo("Tickets", "El monitor ya está en ejecución.")
+            return
+        if not config.get("auto_like_tickets_config", {}).get("bitrix_webhook_url", "").strip():
+            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 y guarda los cambios.")
+            return
+
+        auto_like_process = subprocess.Popen(
+            _get_launch_cmd(['--auto-like-tickets']),
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+        auto_like_status_var.set("🟢  En ejecución")
+        btn_al_iniciar.config(state=tk.DISABLED)
+        btn_al_detener.config(state=tk.NORMAL)
+        messagebox.showinfo("Tickets", "Monitor iniciado en segundo plano.\nRevisa 'auto_like_tickets.log' para ver la actividad.")
+        root.after(2000, al_check_status)
+
+    def al_detener():
+        nonlocal auto_like_process
+        if auto_like_process is None:
+            return
+        try:
+            auto_like_process.terminate()
+            auto_like_process.wait(timeout=5)
+        except Exception:
+            try:
+                auto_like_process.kill()
+            except Exception:
+                pass
+        auto_like_process = None
+        auto_like_status_var.set("⚫  Detenido")
+        btn_al_iniciar.config(state=tk.NORMAL)
+        btn_al_detener.config(state=tk.DISABLED)
+        messagebox.showinfo("Tickets", "Monitor detenido.")
+
+    def al_ver_log():
+        log_path = BASE_DIR / "auto_like_tickets.log"
+        if not log_path.exists():
+            messagebox.showinfo("Log", "Todavía no se ha generado 'auto_like_tickets.log'.")
+            return
+        os.startfile(str(log_path))
+
+    al_btn_row = ttk.Frame(al_control_frame)
+    al_btn_row.pack(fill="x")
+
+    btn_al_iniciar = ttk.Button(al_btn_row, text="▶  Iniciar Monitor", command=al_iniciar, style="Accent.TButton")
+    btn_al_iniciar.pack(side="left", padx=3)
+
+    btn_al_detener = ttk.Button(al_btn_row, text="⏹  Detener Monitor", command=al_detener, state="disabled")
+    btn_al_detener.pack(side="left", padx=3)
+
+    ttk.Label(al_btn_row, textvariable=auto_like_status_var, foreground=ACCENT, font=("Segoe UI", 10, "bold")).pack(side="left", padx=15)
+
+    ttk.Button(al_btn_row, text="🗒  Ver log", command=al_ver_log).pack(side="right", padx=3)
+
+    # ------------------------------------------------------------------
+    # 5. PESTAÑA CONFIGURACIÓN (credenciales + URL de Sheets) — siempre
+    #    al final, a la derecha de las demás pestañas.
     # ------------------------------------------------------------------
     tab_config = ttk.Frame(notebook)
     notebook.add(tab_config, text="   Configuración   ")
@@ -1626,11 +2172,23 @@ def run_gui():
         )
 
     def on_closing():
-        nonlocal scheduler_process
+        nonlocal scheduler_process, cargas_voip_process, auto_like_process
         if scheduler_process is not None:
             try:
                 scheduler_process.terminate()
                 scheduler_process.wait(timeout=3)
+            except Exception:
+                pass
+        if cargas_voip_process is not None:
+            try:
+                cargas_voip_process.terminate()
+                cargas_voip_process.wait(timeout=3)
+            except Exception:
+                pass
+        if auto_like_process is not None:
+            try:
+                auto_like_process.terminate()
+                auto_like_process.wait(timeout=3)
             except Exception:
                 pass
         root.destroy()
@@ -1670,7 +2228,13 @@ if __name__ == "__main__":
             setup_console()
             config = load_config()
             run_balance_cycle(config)
+        elif sys.argv[1] == '--cargas-voip':
+            import cargas_voip
+            cargas_voip.run()
+        elif sys.argv[1] == '--auto-like-tickets':
+            import auto_like_tickets
+            auto_like_tickets.run()
         else:
-            print("Argumento desconocido. Use --scheduler o --balance.")
+            print("Argumento desconocido. Use --scheduler, --balance, --cargas-voip o --auto-like-tickets.")
     else:
         run_gui()
