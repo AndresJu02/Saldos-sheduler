@@ -18,6 +18,7 @@ __pycache__/
 chrome-portable/
 chromedriver-portable/
 
-# Estado y registros generados por el monitor de Cargas VOIP
+# Estado y registros generados por los monitores de Bitrix24
 estado_cargas_voip.json
 registro_cargas.csv
+estado_tickets.json
