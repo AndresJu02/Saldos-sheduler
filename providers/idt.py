@@ -7,6 +7,33 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
+from core.paths import BASE_DIR
+
+# Perfil de Chrome propio y persistente para IDT (ver get_balance): un
+# Chrome "nuevo" sin cookies en cada corrida hace que IDT lo trate como
+# dispositivo desconocido y muestre su verificación anti-bot ("Anomaly
+# Detected"), aunque el login manual del usuario -que sí tiene cookies de
+# sesiones anteriores- nunca la vea. Reutilizando siempre esta misma
+# carpeta, después de la primera vez (que puede seguir pidiendo esa
+# verificación, y hay que resolverla a mano una vez con headless=False)
+# el dispositivo queda reconocido para las corridas automáticas de ahí en
+# más, igual que el navegador normal de un usuario real.
+PERFIL_CHROME_IDT = BASE_DIR / "chrome_profile_idt"
+
+
+def _escribir_lento(elemento, texto, duracion_seg=6.0):
+    """Escribe `texto` caracter por caracter repartiendo `duracion_seg` entre
+    todos, en vez de mandarlo de una con send_keys(texto) -que Selenium
+    manda casi instantáneo-. Se usa para la contraseña de IDT porque el
+    sitio la rechazaba/marcaba como sospechosa cuando llegaba de golpe."""
+    if not texto:
+        elemento.send_keys(texto)
+        return
+    demora = duracion_seg / len(texto)
+    for caracter in texto:
+        elemento.send_keys(caracter)
+        time.sleep(demora)
+
 
 class IDTProvider(BaseProvider):
     name = "IDT"
@@ -110,7 +137,17 @@ class IDTProvider(BaseProvider):
         chrome_exe = driver_paths["chrome_exe"]
         chromedriver_exe = driver_paths["chromedriver_exe"]
 
-        driver = get_driver_fn(chrome_exe, chromedriver_exe, headless=headless) if get_driver_fn else None
+        PERFIL_CHROME_IDT.mkdir(parents=True, exist_ok=True)
+        try:
+            driver = get_driver_fn(
+                chrome_exe, chromedriver_exe, headless=headless, user_data_dir=str(PERFIL_CHROME_IDT)
+            ) if get_driver_fn else None
+        except TypeError:
+            # get_driver_fn de alguna versión anterior que todavía no acepta
+            # user_data_dir -no debería pasar en esta app, pero así no se
+            # rompe get_balance() por completo si algún día se llama con
+            # una función distinta que no lo soporte-.
+            driver = get_driver_fn(chrome_exe, chromedriver_exe, headless=headless) if get_driver_fn else None
         if not driver:
             return False, "No se pudo crear el driver"
 
@@ -119,19 +156,78 @@ class IDTProvider(BaseProvider):
             driver.get(TARGET_URL)
             wait = WebDriverWait(driver, 40)
 
-            # --- Login usuario ---
-            try:
-                user_input = wait.until(EC.presence_of_element_located((By.NAME, "user[login]")))
-                user_input.clear()
-                user_input.send_keys(config["usuario"])
+            def _pagina_cargo_bien(espera):
+                """True si esta pantalla trae el login o ya el saldo -o sea,
+                no es una pantalla intermedia rota-."""
                 try:
-                    driver.find_element(By.NAME, "commit").click()
+                    WebDriverWait(driver, espera).until(lambda d: (
+                        d.find_elements(By.NAME, "user[login]")
+                        or d.find_elements(By.NAME, "username")
+                        or d.find_elements(By.XPATH, "//div[contains(text(), 'Account Balance:')]")
+                    ))
+                    return True
+                except TimeoutException:
+                    return False
+
+            def _es_pagina_no_encontrada(espera):
+                """True si, tras resolver el captcha anti-bot, quedamos en
+                .../login mostrando el "Page not found" de IDT -el caso
+                puntual que dispara el reintento con la URL base-."""
+                try:
+                    WebDriverWait(driver, espera).until(
+                        lambda d: "/login" in (d.current_url or "").lower()
+                    )
+                except TimeoutException:
+                    return False
+                try:
+                    body_text = driver.find_element(By.TAG_NAME, "body").text
+                    return "page not found" in body_text.lower()
+                except Exception:
+                    return False
+
+            def _manejar_challenge_anti_bot():
+                """Se llama justo después de mandar el usuario o la
+                contraseña -el challenge de Radware/ShieldSquare
+                (validate.perfdrive.com) puede aparecer en cualquiera de
+                los dos pasos, no siempre en el mismo-. Si estamos ahí,
+                espera a que se resuelva solo (vía JS, sin intervención) y,
+                si al salir quedamos en el "Page not found" de .../login,
+                recarga con la URL base. Devuelve True si tuvo que recargar
+                -la página quedó "desde cero" y quien llama puede necesitar
+                reenviar el usuario-."""
+                recargo = False
+                try:
+                    if "validate.perfdrive.com" in (driver.current_url or "").lower():
+                        print("IDT - challenge anti-bot detectado (validate.perfdrive.com), "
+                              "esperando a que se resuelva solo...", flush=True)
+                        try:
+                            WebDriverWait(driver, 60).until(
+                                lambda d: "validate.perfdrive.com" not in (d.current_url or "").lower()
+                            )
+                        except TimeoutException:
+                            pass
+
+                    if _es_pagina_no_encontrada(espera=3):
+                        print("IDT - tras el challenge anti-bot quedó en 'Page not found' "
+                              "(.../login); recargando con la URL base...", flush=True)
+                        driver.get(TARGET_URL)
+                        _pagina_cargo_bien(espera=15)
+                        recargo = True
                 except Exception:
                     pass
-                time.sleep(0.6)
-            except TimeoutException:
+                return recargo
+
+            def _enviar_usuario():
+                """Completa y manda el campo de usuario -soporta las dos
+                variantes de nombre que usa IDT según la pantalla-."""
                 try:
-                    user_input = wait.until(EC.presence_of_element_located((By.NAME, "username")))
+                    user_input = wait.until(EC.presence_of_element_located((By.NAME, "user[login]")))
+                except TimeoutException:
+                    try:
+                        user_input = wait.until(EC.presence_of_element_located((By.NAME, "username")))
+                    except Exception:
+                        return
+                try:
                     user_input.clear()
                     user_input.send_keys(config["usuario"])
                     try:
@@ -142,41 +238,90 @@ class IDTProvider(BaseProvider):
                 except Exception:
                     pass
 
-            # --- Password ---
-            pwd_input = None
-            try:
-                pwd_input = wait.until(EC.presence_of_element_located((By.NAME, "user[password]")))
-            except Exception:
-                try:
-                    pwd_input = wait.until(EC.presence_of_element_located((By.NAME, "password")))
-                except Exception:
-                    pass
+            if _es_pagina_no_encontrada(espera=3) or not _pagina_cargo_bien(espera=6):
+                # El challenge anti-bot de IDT (Radware/ShieldSquare,
+                # validate.perfdrive.com) a veces, al resolverlo, redirige a
+                # una URL (ej. .../login) que el propio sitio de IDT devuelve
+                # como "Page not found" -aunque el check en sí se haya
+                # pasado bien-. Volver a pedir la URL raíz (la que siempre
+                # funcionó) alcanza para que cargue la página real, ya con
+                # las cookies de la verificación puestas.
+                print("IDT - la página no trajo login ni saldo (posible 'Page not found' tras el "
+                      "check anti-bot); reintentando con la URL base...", flush=True)
+                driver.get(TARGET_URL)
+                _pagina_cargo_bien(espera=15)
 
-            if pwd_input:
+            # --- ¿Ya hay sesión iniciada? ---
+            # Con el perfil de Chrome persistente (PERFIL_CHROME_IDT) las
+            # cookies sobreviven entre corridas: si la sesión anterior sigue
+            # vigente, IDT manda directo a la pantalla de saldo y el
+            # formulario de login nunca aparece. Sin este chequeo, cada uno
+            # de los wait.until() de login/password de abajo tarda sus 40s
+            # completos en agotarse esperando un campo que no existe -varios
+            # minutos perdidos solo para terminar leyendo el saldo igual-.
+            ya_logueado = False
+            try:
+                WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'Account Balance:')]"))
+                )
+                ya_logueado = True
+            except TimeoutException:
+                ya_logueado = False
+
+            if not ya_logueado:
+                # --- Login usuario ---
+                _enviar_usuario()
+
+                # El challenge anti-bot (validate.perfdrive.com) puede
+                # aparecer justo acá, apenas se manda el usuario. Si tocó
+                # recargar la URL base, la pantalla vuelve a pedir el
+                # usuario desde cero -hay que reenviarlo-.
+                if _manejar_challenge_anti_bot():
+                    _enviar_usuario()
+
+                # --- Password ---
+                pwd_input = None
                 try:
-                    pwd_input.clear()
-                    pwd_input.send_keys(config["password"])
+                    pwd_input = wait.until(EC.presence_of_element_located((By.NAME, "user[password]")))
+                except Exception:
                     try:
-                        driver.find_element(By.NAME, "commit").click()
+                        pwd_input = wait.until(EC.presence_of_element_located((By.NAME, "password")))
                     except Exception:
-                        pwd_input.send_keys(Keys.ENTER)
+                        pass
+
+                if pwd_input:
+                    try:
+                        pwd_input.clear()
+                        _escribir_lento(pwd_input, config["password"], duracion_seg=6.0)
+                        try:
+                            driver.find_element(By.NAME, "commit").click()
+                        except Exception:
+                            pwd_input.send_keys(Keys.ENTER)
+                        time.sleep(0.8)
+                    except Exception:
+                        pass
+
+                # El challenge anti-bot también puede aparecer acá, justo
+                # después de enviar la contraseña. Si ya estamos logueados
+                # (la recarga trajo el saldo directo), lo de más abajo
+                # simplemente no encuentra preguntas de seguridad ni pisa
+                # nada -es inofensivo llamarlo igual-.
+                _manejar_challenge_anti_bot()
+
+            # --- Preguntas de seguridad (solo si tocó loguearse recién) ---
+            if not ya_logueado:
+                try:
+                    filled = self._handle_security_questions(
+                        driver,
+                        config.get("pet_answer", "Yankee"),
+                        config.get("author_answer", "Eckhart Tollee")
+                    )
+                    if filled:
+                        print(f"IDT - Se llenaron {filled} preguntas de seguridad automáticamente.", flush=True)
                     time.sleep(0.8)
                 except Exception:
-                    pass
-
-            # --- Preguntas de seguridad ---
-            try:
-                filled = self._handle_security_questions(
-                    driver,
-                    config.get("pet_answer", "Yankee"),
-                    config.get("author_answer", "Eckhart Tollee")
-                )
-                if filled:
-                    print(f"IDT - Se llenaron {filled} preguntas de seguridad automáticamente.", flush=True)
-                time.sleep(0.8)
-            except Exception:
-                import traceback
-                traceback.print_exc()
+                    import traceback
+                    traceback.print_exc()
 
             # --- Balance ---
             raw = wait.until(

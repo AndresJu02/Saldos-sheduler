@@ -50,14 +50,22 @@ def get_all_providers():
         if p.name not in nombres:
             providers.append(p)
 
-    # Proveedores genéricos creados desde la GUI (botón "Agregar proveedor")
+    # Proveedores genéricos creados desde la GUI (botón "Agregar proveedor").
+    # "steps" presente -> formato nuevo (editor de pasos, flow_provider.py);
+    # ausente -> formato viejo (4 campos fijos, generic_provider.py), que se
+    # sigue pudiendo ejecutar aunque el usuario no lo haya vuelto a guardar
+    # desde que existe el editor de pasos.
     try:
         from generic_provider import GenericWebProvider
+        from core.flow_provider import FlowWebProvider
         cfg = load_config()
         for custom in cfg.get("custom_providers", []):
             nombre = str(custom.get("name", "")).strip()
             if nombre and nombre not in nombres:
-                providers.append(GenericWebProvider(custom))
+                if custom.get("steps"):
+                    providers.append(FlowWebProvider(custom))
+                else:
+                    providers.append(GenericWebProvider(custom))
                 nombres.add(nombre)
     except Exception as e:
         logger.warning(f"No se pudieron cargar proveedores genéricos: {e}")

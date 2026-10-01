@@ -1,11 +1,14 @@
 """Pestaña "Tickets": configura y controla el monitor de auto-like de
 tickets asignados. La lógica del monitor vive en auto_like_tickets.py
 (raíz del proyecto), no aquí — este archivo solo construye la pestaña."""
-import os
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 from gui.process_control import ManagedProcess
+from gui import dialogs as messagebox
+from gui.dialogs import boton_ayuda
+from gui.log_viewer import crear_visor_log
+from gui.collapsible import crear_seccion_plegable
 
 
 def build(notebook, ctx):
@@ -30,8 +33,8 @@ def build(notebook, ctx):
     if not al_cfg.get("bitrix_webhook_url"):
         al_cfg["bitrix_webhook_url"] = config.get("cargas_voip_config", {}).get("bitrix_webhook_url", "")
 
-    al_conexion_frame = ttk.LabelFrame(tab_tickets, text="🔌  Conexión Bitrix24", padding=15)
-    al_conexion_frame.pack(fill="x", padx=10, pady=(15, 10))
+    al_conexion_wrapper, al_conexion_frame = crear_seccion_plegable(tab_tickets, "🔌  Conexión Bitrix24")
+    al_conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
     ttk.Label(al_conexion_frame, text="Webhook URL:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
     al_webhook_var = tk.StringVar(value=al_cfg.get("bitrix_webhook_url", ""))
@@ -46,16 +49,18 @@ def build(notebook, ctx):
     ttk.Entry(al_conexion_frame, textvariable=al_user_var, width=10).grid(row=1, column=3, padx=15, pady=5, sticky="w")
     al_conexion_frame.columnconfigure(1, weight=1)
 
-    ttk.Label(al_conexion_frame, text="Intervalo de sondeo (s):", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=5)
+    fila_poll = ttk.Frame(al_conexion_frame)
+    fila_poll.grid(row=2, column=0, sticky="w", pady=5)
+    boton_ayuda(
+        fila_poll,
+        "Cuando llegue al chat un mensaje con el formato \"ticket <número> asignado a "
+        "[USER=<id>]...\" y el <id> coincida con 'Mi User ID', la aplicación le da like "
+        "automáticamente. No reacciona a ningún otro tipo de mensaje del chat.",
+        titulo="Auto-like de tickets",
+    ).pack(side="left", padx=(0, 6))
+    ttk.Label(fila_poll, text="Intervalo de sondeo (s):", font=("Segoe UI", 10, "bold")).pack(side="left")
     al_poll_var = tk.StringVar(value=str(al_cfg.get("poll_interval", 20)))
     ttk.Entry(al_conexion_frame, textvariable=al_poll_var, width=10).grid(row=2, column=1, padx=15, pady=5, sticky="w")
-
-    aviso_tickets = ("Cuando llegue al chat un mensaje con el formato "
-                      "\"ticket <número> asignado a [USER=<id>]...\" y el <id> coincida con "
-                      "'Mi User ID', la aplicación le da like automáticamente. No reacciona a "
-                      "ningún otro tipo de mensaje del chat.")
-    ttk.Label(al_conexion_frame, text=aviso_tickets, foreground="#9399b2", wraplength=650,
-              justify="left", font=("Segoe UI", 9)).grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 0))
 
     def guardar_tickets():
         try:
@@ -108,13 +113,6 @@ def build(notebook, ctx):
         monitor.stop()
         messagebox.showinfo("Tickets", "Monitor detenido.")
 
-    def al_ver_log():
-        log_path = base_dir / "auto_like_tickets.log"
-        if not log_path.exists():
-            messagebox.showinfo("Log", "Todavía no se ha generado 'auto_like_tickets.log'.")
-            return
-        os.startfile(str(log_path))
-
     al_btn_row = ttk.Frame(al_control_frame)
     al_btn_row.pack(fill="x")
 
@@ -126,4 +124,4 @@ def build(notebook, ctx):
 
     ttk.Label(al_btn_row, textvariable=auto_like_status_var, foreground=ACCENT, font=("Segoe UI", 10, "bold")).pack(side="left", padx=15)
 
-    ttk.Button(al_btn_row, text="🗒  Ver log", command=al_ver_log).pack(side="right", padx=3)
+    crear_visor_log(al_btn_row, al_control_frame, base_dir / "auto_like_tickets.log", root).pack(side="right", padx=3)

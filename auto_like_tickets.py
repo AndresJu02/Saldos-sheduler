@@ -34,6 +34,8 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = Path(__file__).resolve().parent
 
+from core.logging_tools import configurar_logger_rotativo
+
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
 STATE_FILE = BASE_DIR / "estado_tickets.json"
 LOG_FILE = BASE_DIR / "auto_like_tickets.log"
@@ -52,12 +54,12 @@ logger = logging.getLogger("auto_like_tickets")
 
 
 def _setup_logging():
-    logger.handlers.clear()
-    handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
-    logger.propagate = False
+    # Rota el log a la medianoche: cada día arranca vacío y solo se
+    # conservan los últimos días (backupCount) en archivos aparte
+    # ('auto_like_tickets.log.YYYY-MM-DD'), que se van borrando solos -
+    # así no se acumula información indefinidamente. (La rotación en sí
+    # vive en core/logging_tools.py -ver el docstring de ese módulo.)
+    configurar_logger_rotativo(logger, LOG_FILE, backup_count=3, nivel=logging.DEBUG)
 
 
 def load_auto_like_config() -> dict:

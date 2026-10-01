@@ -21,6 +21,13 @@ TESSERACT_ASSET_RE = re.compile(r"^tesseract-ocr-w64-setup-.*\.exe$", re.IGNOREC
 TESSERACT_FALLBACK_VERSION = "5.5.3"
 TESSERACT_FALLBACK_URL = "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe"
 
+# El instalador oficial de Windows no siempre trae el paquete de español
+# (cargas_voip.py llama a Tesseract con lang="spa+eng"; sin este archivo,
+# Tesseract ignora "spa" en silencio y sigue solo con inglés). Se descarga
+# del mismo repo oficial (tessdata_fast) que trae el eng.traineddata que
+# ya instala el setup.
+SPA_TRAINEDDATA_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/spa.traineddata"
+
 
 def get_latest_tesseract_installer():
     """
@@ -70,6 +77,81 @@ def find_tesseract_exe(configured_path: str = ""):
     return None
 
 
+def has_spanish_traineddata(exe_path: str) -> bool:
+    """True si junto al tesseract.exe indicado ya existe tessdata/spa.traineddata."""
+    if not exe_path:
+        return False
+    return (Path(exe_path).parent / "tessdata" / "spa.traineddata").is_file()
+
+
+def _elevated_copy(src: Path, dst: Path, wait_seconds: int = 90) -> bool:
+    """
+    Copia src->dst solicitando elevación (UAC) vía ShellExecute "runas",
+    ya que dst suele estar en Program Files. Es asíncrono (Windows no
+    permite esperar el proceso elevado de forma directa desde acá), así
+    que sondea la aparición del archivo hasta wait_seconds.
+    """
+    import ctypes
+    import time
+
+    params = f'/c copy /Y "{src}" "{dst}"'
+    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", params, None, 0)
+    if ret <= 32:
+        return False  # el usuario canceló el aviso de UAC, o falló al lanzarlo
+
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        if dst.is_file():
+            return True
+        time.sleep(1)
+    return dst.is_file()
+
+
+def ensure_spanish_traineddata(exe_path: str, progress_cb=None) -> bool:
+    """
+    Se asegura de que exista tessdata/spa.traineddata junto al tesseract.exe
+    indicado; si falta, lo descarga y lo copia (pidiendo permisos de
+    administrador con UAC si la carpeta tessdata no es escribible, como
+    ocurre en la instalación por defecto dentro de Program Files).
+    """
+    def log(msg):
+        logger.info(msg)
+        if progress_cb:
+            progress_cb(msg)
+
+    if not exe_path:
+        return False
+    dest = Path(exe_path).parent / "tessdata" / "spa.traineddata"
+    if dest.is_file():
+        return True
+
+    log("Descargando paquete de idioma español (spa.traineddata)...")
+    tmp_path = BASE_DIR / "spa.traineddata"
+    download_file(SPA_TRAINEDDATA_URL, tmp_path)
+
+    try:
+        try:
+            shutil.copy2(tmp_path, dest)
+        except PermissionError:
+            log("Se requieren permisos de administrador para copiar a "
+                f"'{dest.parent}'; solicitando elevación (UAC)...")
+            if not _elevated_copy(tmp_path, dest):
+                log("No se pudo instalar el paquete de español (se canceló "
+                    "el aviso de permisos, o falló la copia). Tesseract "
+                    "seguirá reconociendo solo en inglés.")
+                return False
+    finally:
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
+
+    ok = dest.is_file()
+    log("Paquete de español instalado correctamente." if ok else
+        "No se pudo confirmar la instalación del paquete de español.")
+    return ok
+
+
 def install_tesseract(progress_cb=None):
     """
     Descarga el instalador oficial más reciente de Tesseract y lo ejecuta.
@@ -111,6 +193,7 @@ def install_tesseract(progress_cb=None):
     exe_path = find_tesseract_exe()
     if exe_path:
         log(f"Tesseract {version} instalado en: {exe_path}")
+        ensure_spanish_traineddata(exe_path, progress_cb=progress_cb)
     else:
         log("El instalador se ejecutó pero no se encontró tesseract.exe; "
             "si se abrió el asistente, complétalo y vuelve a intentar.")

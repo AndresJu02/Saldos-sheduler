@@ -10,8 +10,10 @@ Para agregar una pestaña nueva:
   3. Configuración siempre debe agregarse de última (queda a la derecha).
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from pathlib import Path
+
+from gui import dialogs as messagebox
 
 from remote_lock import verificar_bloqueo
 from core.config import load_config, save_config
@@ -21,7 +23,7 @@ from core.paths import BASE_DIR
 from gui.theme import apply_dark_theme, apply_dark_titlebar
 from gui.context import AppContext
 from gui.process_control import ManagedProcess
-from gui.tabs import proveedores, horarios, cargas_voip_tab, tickets_tab, configuracion
+from gui.tabs import proveedores, cargas_voip_tab, tickets_tab, didww_renovacion_tab, tienda_did_tab, configuracion
 
 
 def run_gui():
@@ -65,13 +67,21 @@ def run_gui():
     root.after(150, verificar_y_avisar)
 
     # ====================== NOTEBOOK ======================
+    # Se crea (y se le agregan las pestañas) antes de mostrarlo, pero el
+    # .pack() se deja para el final -después de empacar la barra inferior-
+    # porque el orden de los .pack() es lo que decide qué se encoge primero
+    # si la ventana se hace más chica: lo empacado primero (bottom, con
+    # tamaño fijo) se respeta, y lo empacado después (notebook, expand=True)
+    # es lo que cede espacio. Empacar el notebook antes hacía que los
+    # botones de Iniciar/Detener/Ejecutar/Salir desaparecieran al achicar
+    # la ventana.
     notebook = ttk.Notebook(root)
-    notebook.pack(fill="both", expand=True, padx=15, pady=(15, 5))
 
     proveedores.build(notebook, ctx)
-    horarios.build(notebook, ctx)
     cargas_voip_tab.build(notebook, ctx)
     tickets_tab.build(notebook, ctx)
+    didww_renovacion_tab.build(notebook, ctx)
+    tienda_did_tab.build(notebook, ctx)
     configuracion.build(notebook, ctx)  # siempre de última: queda más a la derecha
 
     # ====================== BARRA INFERIOR (Scheduler de saldos) ======================
@@ -139,5 +149,7 @@ def run_gui():
     ttk.Button(bottom, text="Salir", command=on_closing).pack(side="right", padx=5)
 
     ttk.Label(bottom, text="v2.1 ·by Andres", foreground="#6c7086", font=("Segoe UI", 8)).pack(side="right", padx=10)
+
+    notebook.pack(fill="both", expand=True, padx=15, pady=(15, 5))
 
     root.mainloop()

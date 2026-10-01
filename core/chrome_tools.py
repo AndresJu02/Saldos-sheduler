@@ -233,7 +233,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 
 
-def get_robust_driver(chrome_exe: str, chromedriver_exe: str, headless: bool = True):
+def get_robust_driver(chrome_exe: str, chromedriver_exe: str, headless: bool = True, user_data_dir: str = None):
     opts = ChromeOptions()
     opts.binary_location = chrome_exe
     opts.add_argument("--disable-blink-features=AutomationControlled")
@@ -243,6 +243,14 @@ def get_robust_driver(chrome_exe: str, chromedriver_exe: str, headless: bool = T
     opts.add_argument("--disable-infobars")
     opts.add_argument("--no-default-browser-check")
     opts.add_argument("--no-first-run")
+    if user_data_dir:
+        # Perfil de Chrome PERSISTENTE (cookies/sesión sobreviven entre
+        # corridas) en vez del perfil descartable de siempre -algunos
+        # sitios (ej. IDT) tratan un navegador sin cookies como "dispositivo
+        # desconocido" y piden verificación extra; con un perfil que se
+        # reutiliza, después de la primera vez queda reconocido igual que
+        # el navegador normal de un usuario real.
+        opts.add_argument(f"--user-data-dir={user_data_dir}")
     if headless:
         opts.add_argument("--headless=new")
         opts.add_argument("--disable-gpu")

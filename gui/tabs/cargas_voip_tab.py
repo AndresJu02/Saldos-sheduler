@@ -4,10 +4,14 @@ cargas_voip.py (raíz del proyecto), no aquí — este archivo solo construye
 la pestaña."""
 import os
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
 
-from core.tesseract_tools import find_tesseract_exe, install_tesseract
+from core.tesseract_tools import find_tesseract_exe, install_tesseract, has_spanish_traineddata
 from gui.process_control import ManagedProcess
+from gui import dialogs as messagebox
+from gui.dialogs import boton_ayuda, checkbox_modo_prueba
+from gui.log_viewer import crear_visor_log
+from gui.collapsible import crear_seccion_plegable
 
 
 def build(notebook, ctx):
@@ -52,8 +56,8 @@ def build(notebook, ctx):
     cv_canvas.bind("<Enter>", _cv_bind_mousewheel)
     cv_canvas.bind("<Leave>", _cv_unbind_mousewheel)
 
-    conexion_frame = ttk.LabelFrame(cv_content, text="🔌  Conexión Bitrix24", padding=15)
-    conexion_frame.pack(fill="x", padx=10, pady=(15, 10))
+    conexion_wrapper, conexion_frame = crear_seccion_plegable(cv_content, "🔌  Conexión Bitrix24")
+    conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
     ttk.Label(conexion_frame, text="Webhook URL:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
     cv_webhook_var = tk.StringVar(value=cv_cfg.get("bitrix_webhook_url", ""))
@@ -64,8 +68,28 @@ def build(notebook, ctx):
     ttk.Entry(conexion_frame, textvariable=cv_chat_var, width=20).grid(row=1, column=1, padx=15, pady=5, sticky="w")
     conexion_frame.columnconfigure(1, weight=1)
 
-    validacion_frame = ttk.LabelFrame(cv_content, text="✅  Validación", padding=15)
-    validacion_frame.pack(fill="x", padx=10, pady=(0, 10))
+    fila_estado_sheet = ttk.Frame(conexion_frame)
+    fila_estado_sheet.grid(row=2, column=0, sticky="w", pady=5)
+    boton_ayuda(
+        fila_estado_sheet,
+        "Aquí se guarda hasta qué mensaje ya se revisó, compartido entre las 3 PC que "
+        "usan este monitor por turnos -así ninguna reprocesa lo que otra ya validó-. "
+        "Usa las mismas credenciales de Google ya configuradas en la pestaña Configuración.",
+        titulo="Hoja de estado compartido",
+    ).pack(side="left", padx=(0, 6))
+    ttk.Label(fila_estado_sheet, text="Hoja de estado compartido (URL):",
+              font=("Segoe UI", 10, "bold")).pack(side="left")
+    # Si "import cargas_voip" falló arriba (ver el try/except), no se puede
+    # referenciar cargas_voip.ESTADO_SHEET_URL_DEFAULT -por eso el mismo
+    # valor por defecto queda duplicado acá como string literal-.
+    cv_estado_sheet_var = tk.StringVar(value=cv_cfg.get(
+        "estado_sheet_url",
+        "https://docs.google.com/spreadsheets/d/1ql2y9RBBS4aelGIIawJNielWYo_BUwxtNRCdvVy_gac/edit?gid=0"))
+    ttk.Entry(conexion_frame, textvariable=cv_estado_sheet_var, width=55).grid(
+        row=2, column=1, columnspan=3, padx=15, pady=5, sticky="we")
+
+    validacion_wrapper, validacion_frame = crear_seccion_plegable(cv_content, "✅  Validación")
+    validacion_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     ttk.Label(validacion_frame, text="Intervalo de sondeo (s):", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
     cv_poll_var = tk.StringVar(value=str(cv_cfg.get("poll_interval", 20)))
@@ -79,8 +103,36 @@ def build(notebook, ctx):
     cv_tol_trm_var = tk.StringVar(value=str(cv_cfg.get("tolerancia_trm_pct", 0.1)))
     ttk.Entry(validacion_frame, textvariable=cv_tol_trm_var, width=10).grid(row=1, column=1, padx=15, pady=5, sticky="w")
 
-    ocr_frame = ttk.LabelFrame(cv_content, text="🔎  OCR (Tesseract)", padding=15)
-    ocr_frame.pack(fill="x", padx=10, pady=(0, 10))
+    fila_lookback = ttk.Frame(validacion_frame)
+    fila_lookback.grid(row=1, column=2, sticky="w", pady=5, padx=(20, 0))
+    boton_ayuda(
+        fila_lookback,
+        "En cada ciclo, además de los mensajes nuevos, revisa esta cantidad de mensajes anteriores "
+        "al último ya visto -por si alguno se quedó sin confirmar- y lo reprocesa si no consta como "
+        "ya confirmado (ni en el registro local de esta PC ni en el de las otras, compartido en la "
+        "misma hoja de Sheets del estado).",
+        titulo="Ventana de reintento",
+    ).pack(side="left", padx=(0, 6))
+    ttk.Label(fila_lookback, text="Ventana de reintento (mensajes atrás):",
+              font=("Segoe UI", 10, "bold")).pack(side="left")
+    cv_lookback_var = tk.StringVar(value=str(cv_cfg.get("lookback_n", 10)))
+    ttk.Entry(validacion_frame, textvariable=cv_lookback_var, width=10).grid(row=1, column=3, padx=15, pady=5, sticky="w")
+
+    cv_dry_run_var = tk.BooleanVar(value=bool(cv_cfg.get("dry_run", True)))
+    fila_dry_run = ttk.Frame(validacion_frame)
+    fila_dry_run.grid(row=2, column=0, columnspan=4, sticky="w", pady=(10, 0))
+    checkbox_modo_prueba(fila_dry_run, cv_dry_run_var).pack(side="left")
+    boton_ayuda(
+        fila_dry_run,
+        "Detecta y registra qué haría en el log, sin escribir nada en el chat de Bitrix24 ni modificar "
+        "el CSV de auditoría ni el estado compartido (Sheets). Actívalo para probar cambios sin que el "
+        "equipo vea mensajes de prueba ni se entere si algo sale mal.",
+        titulo="Modo de prueba (dry-run)",
+    ).pack(side="left", padx=(6, 0))
+
+    ocr_wrapper, ocr_frame = crear_seccion_plegable(cv_content, "🔎  OCR (Tesseract)")
+    # OCR no se empaqueta aquí: se deja para el final del archivo para que
+    # quede de última, después de Monitor (ver comentario junto a Monitor).
 
     def seleccionar_tesseract():
         path = filedialog.askopenfilename(
@@ -93,6 +145,13 @@ def build(notebook, ctx):
 
     row_tess = ttk.Frame(ocr_frame)
     row_tess.pack(fill="x")
+    boton_ayuda(
+        row_tess,
+        "El OCR es obligatorio para validar las capturas de carga: Tesseract debe estar instalado "
+        "(usa el botón de abajo para descargarlo) antes de poder iniciar el monitor. El registro "
+        "detallado de cada lectura queda siempre activado en 'cargas_voip.log'.",
+        titulo="OCR (Tesseract)",
+    ).pack(side="left", padx=(0, 6))
     ttk.Label(row_tess, text="Ruta tesseract.exe:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
     cv_tesseract_var = tk.StringVar(value=cv_cfg.get("tesseract_cmd", ""))
     ttk.Entry(row_tess, textvariable=cv_tesseract_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
@@ -169,13 +228,6 @@ def build(notebook, ctx):
     btn_descargar_tesseract.pack(side="right", padx=3)
     actualizar_estado_tesseract()
 
-    aviso_ocr_obligatorio = ("El OCR es obligatorio para validar las capturas de carga: Tesseract debe "
-                              "estar instalado (usa el botón de arriba para descargarlo) antes de poder "
-                              "iniciar el monitor. El registro detallado de cada lectura queda siempre "
-                              "activado en 'cargas_voip.log'.")
-    ttk.Label(ocr_frame, text=aviso_ocr_obligatorio, foreground="#9399b2", wraplength=650,
-              justify="left", font=("Segoe UI", 9)).pack(anchor="w", pady=(14, 0))
-
     def guardar_cargas_voip():
         try:
             poll_interval = int(cv_poll_var.get())
@@ -188,6 +240,11 @@ def build(notebook, ctx):
         except ValueError:
             messagebox.showerror("Error", "Las tolerancias deben ser números.")
             return
+        try:
+            lookback_n = int(cv_lookback_var.get())
+        except ValueError:
+            messagebox.showerror("Error", "La ventana de reintento debe ser un número entero de mensajes.")
+            return
 
         config["cargas_voip_config"] = {
             "bitrix_webhook_url": cv_webhook_var.get().strip(),
@@ -197,13 +254,12 @@ def build(notebook, ctx):
             "tolerancia_trm_pct": tolerancia_trm_pct,
             "tesseract_cmd": cv_tesseract_var.get().strip(),
             "debug_ocr": True,
+            "estado_sheet_url": cv_estado_sheet_var.get().strip(),
+            "lookback_n": lookback_n,
+            "dry_run": bool(cv_dry_run_var.get()),
         }
         save_config(config)
         messagebox.showinfo("Guardado", "Configuración de Cargas VOIP actualizada.")
-
-    ttk.Button(ocr_frame, text="💾  Guardar configuración", command=guardar_cargas_voip, style="Accent.TButton").pack(
-        anchor="e", pady=(15, 0)
-    )
 
     # ---------------- Control del monitor ----------------
     cv_control_frame = ttk.LabelFrame(cv_content, text="▶  Monitor", padding=15)
@@ -225,11 +281,21 @@ def build(notebook, ctx):
         if not config.get("cargas_voip_config", {}).get("bitrix_webhook_url", "").strip():
             messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 y guarda los cambios.")
             return
-        if not find_tesseract_exe(config.get("cargas_voip_config", {}).get("tesseract_cmd", "")):
+        tesseract_exe = find_tesseract_exe(config.get("cargas_voip_config", {}).get("tesseract_cmd", ""))
+        if not tesseract_exe:
             messagebox.showerror(
                 "Tesseract requerido",
                 "El OCR es obligatorio para validar las capturas: instala Tesseract con el botón "
                 "'⬇  Descargar e instalar Tesseract' antes de iniciar el monitor."
+            )
+            return
+        if not has_spanish_traineddata(tesseract_exe):
+            messagebox.showerror(
+                "Falta el paquete de idioma español",
+                "Tesseract está instalado pero sin el paquete de español (spa.traineddata). "
+                "El OCR lee los montos en silencio solo con inglés, lo que puede generar lecturas "
+                "incorrectas. Usa el botón '⬇  Descargar e instalar Tesseract' para instalarlo "
+                "antes de iniciar el monitor."
             )
             return
 
@@ -247,13 +313,6 @@ def build(notebook, ctx):
             return
         os.startfile(str(csv_path))
 
-    def cv_ver_log():
-        log_path = base_dir / "cargas_voip.log"
-        if not log_path.exists():
-            messagebox.showinfo("Log", "Todavía no se ha generado 'cargas_voip.log'.")
-            return
-        os.startfile(str(log_path))
-
     cv_btn_row = ttk.Frame(cv_control_frame)
     cv_btn_row.pack(fill="x")
 
@@ -266,4 +325,14 @@ def build(notebook, ctx):
     ttk.Label(cv_btn_row, textvariable=cargas_voip_status_var, foreground=ACCENT, font=("Segoe UI", 10, "bold")).pack(side="left", padx=15)
 
     ttk.Button(cv_btn_row, text="📄  Ver registro (CSV)", command=cv_ver_registro).pack(side="right", padx=3)
-    ttk.Button(cv_btn_row, text="🗒  Ver log", command=cv_ver_log).pack(side="right", padx=3)
+    crear_visor_log(cv_btn_row, cv_control_frame, base_dir / "cargas_voip.log", root).pack(side="right", padx=3)
+
+    # OCR se empaqueta hasta aquí (después de Monitor) para que el orden
+    # visual quede: Conexión Bitrix24, Validación, Monitor, OCR (Tesseract).
+    ocr_wrapper.pack(fill="x", padx=10, pady=(0, 10))
+
+    # Botón de guardar al final, afuera de las secciones plegables -aplica
+    # a la configuración completa de la pestaña, no solo a la de OCR-.
+    ttk.Button(cv_content, text="💾  Guardar configuración", command=guardar_cargas_voip, style="Accent.TButton").pack(
+        anchor="e", padx=10, pady=(0, 15)
+    )

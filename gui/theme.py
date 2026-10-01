@@ -49,6 +49,36 @@ def apply_dark_theme(root) -> dict:
     style.configure("TButton", background=BUTTON_BG, foreground=FG, borderwidth=0, padding=[10, 5])
     style.map("TButton", background=[("active", "#585b70")])
 
+    # Sin esto, "clam" (el tema base) deja el fondo del Checkbutton en su
+    # blanco por defecto -se nota sobre todo al pasar el mouse (estado
+    # "active")-, porque nunca se le asignó ningún color propio como al
+    # resto de los widgets.
+    style.configure("TCheckbutton", background=BG, foreground=FG, font=("Segoe UI", 10))
+    style.map("TCheckbutton", background=[("active", BG)], foreground=[("active", FG)])
+
+    VERDE = "#a6e3a1"
+    ROJO = "#f38ba8"
+    # Variante para checkboxes de "Modo de prueba" (dry-run): verde cuando
+    # está activado (modo prueba = no toca nada real) y rojo cuando está
+    # apagado (modo real = ya escribe/actúa de verdad) -para que el estado
+    # se note de un vistazo, no solo por la marca del check-.
+    style.configure("Prueba.TCheckbutton", background=BG, font=("Segoe UI", 10, "bold"))
+    style.map("Prueba.TCheckbutton",
+              background=[("active", BG)],
+              foreground=[("selected", VERDE), ("!selected", ROJO)])
+    # El indicador nativo de "clam" (el cuadradito) no dibuja un tilde
+    # claro sobre un fondo de color -se nota poco si está o no marcado-,
+    # así que para este estilo se saca del layout: el propio texto hace de
+    # check (ver gui/dialogs.py -> checkbox_modo_prueba, que antepone
+    # "☑"/"☐" según el estado).
+    style.layout("Prueba.TCheckbutton", [
+        ("Checkbutton.padding", {"sticky": "nswe", "children": [
+            ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
+                ("Checkbutton.label", {"sticky": "nswe"})
+            ]})
+        ]})
+    ])
+
     style.configure("Treeview", background=ENTRY_BG, fieldbackground=ENTRY_BG, foreground=FG, rowheight=30, borderwidth=0)
     style.configure("Treeview.Heading", background=DARKER, foreground=ACCENT, font=("Segoe UI", 10, "bold"), borderwidth=0)
     style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", "#1e1e2e")])

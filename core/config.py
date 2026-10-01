@@ -27,13 +27,25 @@ DEFAULT_CONFIG = {
         "tolerancia_pct": 0.5,
         "tolerancia_trm_pct": 0.1,
         "tesseract_cmd": "",
-        "debug_ocr": True
+        "debug_ocr": True,
+        # Hoja de Sheets compartida entre las 3 PC que rotan el uso de este
+        # monitor, donde se guarda el last_id -ver cargas_voip.py-.
+        "estado_sheet_url": "https://docs.google.com/spreadsheets/d/1ql2y9RBBS4aelGIIawJNielWYo_BUwxtNRCdvVy_gac/edit?gid=0",
+        # Cuántos mensajes ANTERIORES a last_id se revisan en cada ciclo por
+        # si alguno se quedó sin confirmar (ver "ventana de reintento").
+        "lookback_n": 10
     },
     "auto_like_tickets_config": {
         "bitrix_webhook_url": "",
         "tickets_chat_id": "chat97",
         "mi_user_id": "13",
         "poll_interval": 20
+    },
+    "didww_renovacion_config": {
+        "bitrix_webhook_url": "",
+        "chat_id": "",
+        "poll_interval": 30,
+        "dry_run": True
     }
 }
 
