@@ -44,8 +44,23 @@ def build(notebook, ctx):
     def _config_unbind_mousewheel(_event=None):
         config_canvas.unbind_all("<MouseWheel>")
 
-    config_canvas.bind("<Enter>", _config_bind_mousewheel)
-    config_canvas.bind("<Leave>", _config_unbind_mousewheel)
+    # OJO: activar/desactivar esto con <Enter>/<Leave> DEL CANVAS (como se
+    # hizo al principio) casi no funciona, porque esos eventos solo llegan
+    # cuando el mouse está sobre el fondo vacío del canvas -los widgets de
+    # adentro (Entry, Label, botones...) son ventanas propias dentro del
+    # canvas y absorben el Enter/Leave, así que nunca se detecta que el
+    # mouse "entró" si está sobre un campo o una sección, que es casi toda
+    # el área visible-. En cambio, se activa/desactiva según qué pestaña
+    # del Notebook está seleccionada: así la rueda funciona sobre
+    # cualquier punto de la pestaña Configuración, esté lo que esté debajo
+    # del cursor (reportado 2026-10-27).
+    def _config_on_tab_changed(_event=None):
+        if notebook.select() == str(tab_config):
+            _config_bind_mousewheel()
+        else:
+            _config_unbind_mousewheel()
+
+    notebook.bind("<<NotebookTabChanged>>", _config_on_tab_changed, add="+")
 
     # ---------------- Conexión Bitrix24 (compartida) ----------------
     # Cargas VOIP, Tickets, Renovación DIDWW y Notificaciones usan este
