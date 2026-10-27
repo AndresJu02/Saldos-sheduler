@@ -52,13 +52,13 @@ def build(notebook, ctx):
     top_frame = ttk.Frame(tab)
     top_frame.pack(fill="x", padx=10, pady=(8, 0))
 
-    aviso_frame = ttk.Frame(top_frame)
-    aviso_frame.pack(side="left", fill="x", expand=True)
-    ttk.Label(
-        aviso_frame,
-        text="",
-        foreground="#9399b2", wraplength=600, justify="left", font=("Segoe UI", 9)
-    ).pack(anchor="w")
+    # "Número específico" / "Aleatorio" ya no son sub-pestañas: son botones
+    # arriba, a la par de Saldo DIDWW -antes quedaban más abajo, dejando
+    # vacía toda esta franja superior-. Debajo va un separador que marca
+    # dónde termina esta franja y empieza el contenido de cada modo (ver
+    # modo_frame / modo_separador / modo_container más abajo).
+    modo_frame = ttk.Frame(top_frame)
+    modo_frame.pack(side="left", fill="y", anchor="w")
 
     saldo_frame = ttk.Frame(top_frame)
     saldo_frame.pack(side="right", anchor="n")
@@ -77,13 +77,44 @@ def build(notebook, ctx):
     VERDE_OK = "#a6e3a1"
     GRIS_ESTADO = "#9399b2"
 
-    inner = ttk.Notebook(tab)
-    inner.pack(fill="both", expand=True, padx=10, pady=(3, 10))
+    ttk.Separator(tab, orient="horizontal").pack(fill="x", padx=10, pady=(8, 0))
 
-    tab_puntual = ttk.Frame(inner)
-    tab_random = ttk.Frame(inner)
-    inner.add(tab_puntual, text="  Número específico  ")
-    inner.add(tab_random, text="  Aleatorio  ")
+    # Contenedor con los dos modos apilados uno sobre otro (mismo lugar,
+    # mismo ancho): solo se ve el que esté "levantado" con tkraise(), así
+    # que al cambiar de modo no se mueve ni se desalinea nada del resto
+    # del módulo -antes, al ser pestañas separadas, cada una podía quedar
+    # con un ancho/alineación ligeramente distinto-.
+    modo_container = ttk.Frame(tab)
+    modo_container.pack(fill="both", expand=True, padx=10, pady=10)
+    modo_container.columnconfigure(0, weight=1)
+    modo_container.rowconfigure(0, weight=1)
+
+    tab_puntual = ttk.Frame(modo_container)
+    tab_random = ttk.Frame(modo_container)
+    tab_puntual.grid(row=0, column=0, sticky="nsew")
+    tab_random.grid(row=0, column=0, sticky="nsew")
+
+    modo_actual = tk.StringVar(value="puntual")
+
+    def seleccionar_modo(modo):
+        modo_actual.set(modo)
+        if modo == "puntual":
+            tab_puntual.tkraise()
+            btn_modo_puntual.configure(style="Accent.TButton")
+            btn_modo_random.configure(style="TButton")
+        else:
+            tab_random.tkraise()
+            btn_modo_random.configure(style="Accent.TButton")
+            btn_modo_puntual.configure(style="TButton")
+
+    btn_modo_puntual = ttk.Button(modo_frame, text="Número específico", style="Accent.TButton",
+                                   command=lambda: seleccionar_modo("puntual"))
+    btn_modo_puntual.pack(side="left", padx=(0, 6))
+    btn_modo_random = ttk.Button(modo_frame, text="Aleatorio",
+                                  command=lambda: seleccionar_modo("random"))
+    btn_modo_random.pack(side="left")
+
+    tab_puntual.tkraise()
 
     # ------------------------------------------------------------------
     # Helpers comunes
