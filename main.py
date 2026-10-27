@@ -7,6 +7,7 @@ Aplicación unificada de saldos.
 - --cargas-voip        → monitor de validación de cargas (Bitrix24 + OCR).
 - --auto-like-tickets  → auto-like de tickets asignados (Bitrix24).
 - --didww-renovacion   → renovación automática de líneas DIDWW (Bitrix24).
+- --notificaciones     → avisos de escritorio de Canales Abiertos (Bitrix24).
 
 Este archivo es solo el punto de entrada. La lógica de la aplicación
 vive organizada así:
@@ -75,9 +76,12 @@ if __name__ == "__main__":
         elif sys.argv[1] == '--didww-renovacion':
             import didww_renovacion
             didww_renovacion.run()
+        elif sys.argv[1] == '--notificaciones':
+            import notificaciones_bitrix
+            notificaciones_bitrix.run()
         else:
             print("Argumento desconocido. Use --scheduler, --balance, --cargas-voip, "
-                  "--auto-like-tickets o --didww-renovacion.")
+                  "--auto-like-tickets, --didww-renovacion o --notificaciones.")
     else:
         from gui.app import run_gui
         run_gui()

@@ -24,7 +24,7 @@ from core.paths import BASE_DIR
 from gui.theme import apply_dark_theme, apply_dark_titlebar
 from gui.context import AppContext
 from gui.process_control import ManagedProcess
-from gui.tabs import proveedores, cargas_voip_tab, tickets_tab, didww_renovacion_tab, tienda_did_tab, configuracion
+from gui.tabs import proveedores, cargas_voip_tab, tickets_tab, didww_renovacion_tab, tienda_did_tab, notificaciones_tab, configuracion
 
 
 def run_gui():
@@ -92,6 +92,7 @@ def run_gui():
     tickets_tab.build(notebook, ctx)
     didww_renovacion_tab.build(notebook, ctx)
     tienda_did_tab.build(notebook, ctx)
+    notificaciones_tab.build(notebook, ctx)
     configuracion.build(notebook, ctx)  # siempre de última: queda más a la derecha
 
     # ====================== BARRA INFERIOR (Scheduler de saldos) ======================

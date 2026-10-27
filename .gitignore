@@ -22,3 +22,4 @@ chromedriver-portable/
 estado_cargas_voip.json
 registro_cargas.csv
 estado_tickets.json
+estado_notificaciones.json
