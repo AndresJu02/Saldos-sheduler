@@ -9,6 +9,7 @@ Para agregar una pestaña nueva:
      junto a las demás, en el orden en que quieras que aparezca.
   3. Configuración siempre debe agregarse de última (queda a la derecha).
 """
+import sys
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
@@ -59,11 +60,20 @@ def run_gui():
 
     def verificar_y_avisar():
         if verificar_bloqueo():
+            overlay = tk.Frame(root, bg="white")
+            overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+            overlay.lift()
+            root.update_idletasks()
             messagebox.showwarning(
                 "Aplicación bloqueada",
                 "⚠️  Esta aplicación ha sido bloqueada por el administrador.\n\n"
                 "Contacte al soporte para más información."
             )
+            # Se cierre el diálogo con "Aceptar", con Escape o con la X: en
+            # cualquier caso la app queda bloqueada, así que se cierra
+            # por completo en vez de dejar la ventana (ahora tapada) abierta.
+            on_closing()
+            sys.exit(0)
     root.after(150, verificar_y_avisar)
 
     # ====================== NOTEBOOK ======================
