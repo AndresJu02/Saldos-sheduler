@@ -10,7 +10,6 @@ import re
 
 from gui import dialogs as messagebox
 from gui.dialogs import boton_ayuda
-from gui.collapsible import crear_seccion_plegable
 
 from core.providers_registry import get_all_providers, sort_providers_by_order, get_custom_provider_names
 from core.chrome_tools import ensure_chrome, ensure_chromedriver, get_robust_driver
@@ -1024,7 +1023,7 @@ def build(notebook, ctx):
     #  "Horarios"; ahora vive aquí, debajo de la tabla de proveedores —
     #  basta con bajar el scroll de esta pestaña para verla y editarla).
     # ============================================================
-    hor_wrapper, hor_frame = crear_seccion_plegable(prov_content, "⏰  Horarios de ejecución")
+    hor_wrapper, hor_frame = ctx.seccion_plegable(prov_content, "⏰  Horarios de ejecución", "proveedores.horarios")
     hor_wrapper.pack(fill="x", padx=10, pady=(5, 15))
 
     fila_ayuda_horarios = ttk.Frame(hor_frame)

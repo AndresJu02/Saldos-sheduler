@@ -26,7 +26,7 @@ BORDE = "#585b70"
 HOVER = "#313244"
 
 
-def crear_seccion_plegable(parent, titulo, abierta_por_defecto=True):
+def crear_seccion_plegable(parent, titulo, abierta_por_defecto=True, on_toggle=None):
     estado = {"abierta": abierta_por_defecto}
 
     wrapper = ttk.Frame(parent)
@@ -58,6 +58,8 @@ def crear_seccion_plegable(parent, titulo, abierta_por_defecto=True):
     def _alternar(_evt=None):
         estado["abierta"] = not estado["abierta"]
         _refrescar()
+        if on_toggle:
+            on_toggle(estado["abierta"])
 
     def _hover_on(_evt=None):
         for w in widgets_clicables:

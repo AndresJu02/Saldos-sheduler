@@ -74,6 +74,16 @@ def run_gui():
             # por completo en vez de dejar la ventana (ahora tapada) abierta.
             on_closing()
             sys.exit(0)
+        else:
+            # Monitores que arrancan solos al abrir la app (por ahora:
+            # Tickets y Notificaciones) -ver ctx.register_autostart() en
+            # cada pestaña-. Se hace acá, después de confirmar que no está
+            # bloqueada, para no competir con el aviso de arriba.
+            for autostart in ctx.autostart_callbacks:
+                try:
+                    autostart()
+                except Exception:
+                    pass
     root.after(150, verificar_y_avisar)
 
     # ====================== NOTEBOOK ======================

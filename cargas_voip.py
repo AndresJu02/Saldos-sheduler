@@ -94,6 +94,7 @@ else:
 
 from core.logging_tools import configurar_logger_rotativo
 from core.tesseract_tools import find_tesseract_exe, find_tessdata_dir
+from core.config import get_shared_webhook_url
 from remote_lock import verificar_bloqueo
 
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
@@ -134,7 +135,6 @@ AMOUNT_CANDIDATE_RE = re.compile(r"[\d]{1,3}(?:[.,]\d{3})*[.,]\d{2,3}")
 CONFIRMACION_MANUAL_RE = re.compile(r"^\s*confirmad[oa]s?\s*[.!]?\s*$", re.IGNORECASE)
 
 DEFAULT_CARGAS_VOIP_CONFIG = {
-    "bitrix_webhook_url": "",
     "chat_id": "chat135",
     "poll_interval": 20,
     "tolerancia_pct": 0.5,
@@ -176,9 +176,9 @@ def load_cargas_voip_config() -> dict:
     pestaña "Cargas VOIP" de la GUI en scheduler_config.json, que es lo que
     manda una vez el usuario guarda su configuración."""
     cfg = DEFAULT_CARGAS_VOIP_CONFIG.copy()
+    cfg["bitrix_webhook_url"] = ""
 
-    if os.environ.get("BITRIX_WEBHOOK_URL"):
-        cfg["bitrix_webhook_url"] = os.environ["BITRIX_WEBHOOK_URL"]
+    env_webhook = os.environ.get("BITRIX_WEBHOOK_URL")
     if os.environ.get("CHAT_ID"):
         cfg["chat_id"] = os.environ["CHAT_ID"]
     if os.environ.get("POLL_INTERVAL_SECONDS"):
@@ -201,6 +201,7 @@ def load_cargas_voip_config() -> dict:
             for k, v in full_cfg.get("cargas_voip_config", {}).items():
                 if v not in ("", None):
                     cfg[k] = v
+            cfg["bitrix_webhook_url"] = get_shared_webhook_url(full_cfg)
             # credentials_path es de nivel raíz (lo comparte toda la app,
             # no es propio de "cargas_voip_config"): se necesita para
             # autenticar contra la hoja de Sheets del last_id compartido.
@@ -208,6 +209,9 @@ def load_cargas_voip_config() -> dict:
                 cfg["credentials_path"] = full_cfg["credentials_path"]
         except Exception:
             pass
+
+    if env_webhook:
+        cfg["bitrix_webhook_url"] = env_webhook
 
     return cfg
 

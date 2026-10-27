@@ -11,7 +11,6 @@ from gui.process_control import ManagedProcess
 from gui import dialogs as messagebox
 from gui.dialogs import boton_ayuda, checkbox_modo_prueba
 from gui.log_viewer import crear_visor_log
-from gui.collapsible import crear_seccion_plegable
 
 # Debe coincidir con BITRIX_MENSAJES_LIMIT_MAX en cargas_voip.py: Bitrix24
 # no permite traer más de esta cantidad de mensajes por consulta a
@@ -63,12 +62,17 @@ def build(notebook, ctx):
     cv_canvas.bind("<Enter>", _cv_bind_mousewheel)
     cv_canvas.bind("<Leave>", _cv_unbind_mousewheel)
 
-    conexion_wrapper, conexion_frame = crear_seccion_plegable(cv_content, "🔌  Conexión Bitrix24")
+    conexion_wrapper, conexion_frame = ctx.seccion_plegable(cv_content, "🔌  Chat de Bitrix24", "cargas_voip.conexion")
     conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
-    ttk.Label(conexion_frame, text="Webhook URL:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
-    cv_webhook_var = tk.StringVar(value=cv_cfg.get("bitrix_webhook_url", ""))
-    ttk.Entry(conexion_frame, textvariable=cv_webhook_var, width=55).grid(row=0, column=1, columnspan=3, padx=15, pady=5, sticky="we")
+    fila_webhook_cv = ttk.Frame(conexion_frame)
+    fila_webhook_cv.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
+    ttk.Label(
+        fila_webhook_cv,
+        text="ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración.",
+        foreground="#9399b2", font=("Segoe UI", 9)
+    ).pack(side="left")
+    ttk.Button(fila_webhook_cv, text="Ir a Configuración", command=lambda: notebook.select(notebook.tabs()[-1])).pack(side="left", padx=(10, 0))
 
     ttk.Label(conexion_frame, text="Chat ID:", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
     cv_chat_var = tk.StringVar(value=cv_cfg.get("chat_id", "chat135"))
@@ -95,7 +99,7 @@ def build(notebook, ctx):
     ttk.Entry(conexion_frame, textvariable=cv_estado_sheet_var, width=55).grid(
         row=2, column=1, columnspan=3, padx=15, pady=5, sticky="we")
 
-    validacion_wrapper, validacion_frame = crear_seccion_plegable(cv_content, "✅  Validación")
+    validacion_wrapper, validacion_frame = ctx.seccion_plegable(cv_content, "✅  Validación", "cargas_voip.validacion")
     validacion_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     ttk.Label(validacion_frame, text="Intervalo de sondeo (s):", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
@@ -148,7 +152,7 @@ def build(notebook, ctx):
         titulo="Modo de prueba (dry-run)",
     ).pack(side="left", padx=(6, 0))
 
-    ocr_wrapper, ocr_frame = crear_seccion_plegable(cv_content, "🔎  OCR (Tesseract)")
+    ocr_wrapper, ocr_frame = ctx.seccion_plegable(cv_content, "🔎  OCR (Tesseract)", "cargas_voip.ocr")
     # OCR no se empaqueta aquí: se deja para el final del archivo para que
     # quede de última, después de Monitor (ver comentario junto a Monitor).
 
@@ -268,7 +272,6 @@ def build(notebook, ctx):
             cv_lookback_var.set(str(lookback_n))
 
         config["cargas_voip_config"] = {
-            "bitrix_webhook_url": cv_webhook_var.get().strip(),
             "chat_id": cv_chat_var.get().strip() or "chat135",
             "poll_interval": poll_interval,
             "tolerancia_pct": tolerancia_pct,
@@ -299,8 +302,8 @@ def build(notebook, ctx):
         if monitor.running:
             messagebox.showinfo("Cargas VOIP", "El monitor ya está en ejecución.")
             return
-        if not config.get("cargas_voip_config", {}).get("bitrix_webhook_url", "").strip():
-            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 y guarda los cambios.")
+        if not config.get("bitrix_webhook_url", "").strip():
+            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 en la pestaña Configuración.")
             return
         tesseract_exe = find_tesseract_exe(config.get("cargas_voip_config", {}).get("tesseract_cmd", ""))
         if not tesseract_exe:

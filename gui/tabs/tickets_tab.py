@@ -8,7 +8,6 @@ from gui.process_control import ManagedProcess
 from gui import dialogs as messagebox
 from gui.dialogs import boton_ayuda
 from gui.log_viewer import crear_visor_log
-from gui.collapsible import crear_seccion_plegable
 
 
 def build(notebook, ctx):
@@ -27,18 +26,17 @@ def build(notebook, ctx):
     except Exception:
         al_cfg = config.get("auto_like_tickets_config", {})
 
-    # Por comodidad, si todavía no se configuró un Webhook propio para
-    # Tickets, se sugiere el mismo que ya esté guardado para Cargas VOIP
-    # (normalmente es la misma cuenta de Bitrix24).
-    if not al_cfg.get("bitrix_webhook_url"):
-        al_cfg["bitrix_webhook_url"] = config.get("cargas_voip_config", {}).get("bitrix_webhook_url", "")
-
-    al_conexion_wrapper, al_conexion_frame = crear_seccion_plegable(tab_tickets, "🔌  Conexión Bitrix24")
+    al_conexion_wrapper, al_conexion_frame = ctx.seccion_plegable(tab_tickets, "🔌  Conexión Bitrix24", "tickets.conexion")
     al_conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
-    ttk.Label(al_conexion_frame, text="Webhook URL:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
-    al_webhook_var = tk.StringVar(value=al_cfg.get("bitrix_webhook_url", ""))
-    ttk.Entry(al_conexion_frame, textvariable=al_webhook_var, width=55).grid(row=0, column=1, columnspan=3, padx=15, pady=5, sticky="we")
+    fila_webhook_al = ttk.Frame(al_conexion_frame)
+    fila_webhook_al.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
+    ttk.Label(
+        fila_webhook_al,
+        text="ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración.",
+        foreground="#9399b2", font=("Segoe UI", 9)
+    ).pack(side="left")
+    ttk.Button(fila_webhook_al, text="Ir a Configuración", command=lambda: notebook.select(notebook.tabs()[-1])).pack(side="left", padx=(10, 0))
 
     ttk.Label(al_conexion_frame, text="Chat de tickets (ID):", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
     al_chat_var = tk.StringVar(value=al_cfg.get("tickets_chat_id", "chat97"))
@@ -73,7 +71,6 @@ def build(notebook, ctx):
             return
 
         config["auto_like_tickets_config"] = {
-            "bitrix_webhook_url": al_webhook_var.get().strip(),
             "tickets_chat_id": al_chat_var.get().strip() or "chat97",
             "mi_user_id": al_user_var.get().strip(),
             "poll_interval": poll_interval,
@@ -102,8 +99,8 @@ def build(notebook, ctx):
         if monitor.running:
             messagebox.showinfo("Tickets", "El monitor ya está en ejecución.")
             return
-        if not config.get("auto_like_tickets_config", {}).get("bitrix_webhook_url", "").strip():
-            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 y guarda los cambios.")
+        if not config.get("bitrix_webhook_url", "").strip():
+            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 en la pestaña Configuración.")
             return
 
         monitor.start()
@@ -112,6 +109,16 @@ def build(notebook, ctx):
     def al_detener():
         monitor.stop()
         messagebox.showinfo("Tickets", "Monitor detenido.")
+
+    def _al_autostart():
+        # Este monitor se enciende solo al abrir la aplicación -ver
+        # ctx.register_autostart() y gui/app.py-, sin diálogos: si falta
+        # configuración simplemente no arranca, igual que si el usuario
+        # nunca hubiera tocado el botón "Iniciar Monitor".
+        if not monitor.running and config.get("bitrix_webhook_url", "").strip():
+            monitor.start()
+
+    ctx.register_autostart(_al_autostart)
 
     al_btn_row = ttk.Frame(al_control_frame)
     al_btn_row.pack(fill="x")

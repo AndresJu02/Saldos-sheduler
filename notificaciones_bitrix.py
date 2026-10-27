@@ -44,6 +44,7 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
 
 from core.logging_tools import configurar_logger_rotativo
+from core.config import get_shared_webhook_url
 from remote_lock import verificar_bloqueo
 
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
@@ -54,7 +55,6 @@ ICON_PATH = BASE_DIR / "icono.ico"
 APP_ID = "Saldos Scheduler - Canales abiertos"
 
 DEFAULT_NOTIFICACIONES_CONFIG = {
-    "bitrix_webhook_url": "",
     "mi_user_id": "13",
     "poll_interval": 15,
 }
@@ -70,13 +70,13 @@ def _setup_logging():
 
 def load_notificaciones_config() -> dict:
     """Igual que en los demás monitores: valores por defecto, variables de
-    entorno y lo guardado desde la pestaña "Notificaciones" de la GUI. Si
-    no se configuró un Webhook propio, se reutiliza el de Cargas VOIP por
-    comodidad (normalmente comparten el mismo)."""
+    entorno y lo guardado desde la pestaña "Notificaciones" de la GUI. El
+    Webhook de Bitrix24 es el compartido entre todos los monitores -se
+    configura una sola vez en la pestaña Configuración-."""
     cfg = DEFAULT_NOTIFICACIONES_CONFIG.copy()
+    cfg["bitrix_webhook_url"] = ""
 
-    if os.environ.get("BITRIX_WEBHOOK_URL"):
-        cfg["bitrix_webhook_url"] = os.environ["BITRIX_WEBHOOK_URL"]
+    env_webhook = os.environ.get("BITRIX_WEBHOOK_URL")
     if os.environ.get("MI_USER_ID"):
         cfg["mi_user_id"] = os.environ["MI_USER_ID"]
     if os.environ.get("POLL_INTERVAL_SECONDS"):
@@ -86,13 +86,15 @@ def load_notificaciones_config() -> dict:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
                 full_cfg = json.load(f)
-            if not cfg["bitrix_webhook_url"]:
-                cfg["bitrix_webhook_url"] = full_cfg.get("cargas_voip_config", {}).get("bitrix_webhook_url", "")
             for k, v in full_cfg.get("notificaciones_config", {}).items():
                 if v not in ("", None):
                     cfg[k] = v
+            cfg["bitrix_webhook_url"] = get_shared_webhook_url(full_cfg)
         except Exception:
             pass
+
+    if env_webhook:
+        cfg["bitrix_webhook_url"] = env_webhook
 
     return cfg
 

@@ -10,7 +10,6 @@ from gui.process_control import ManagedProcess
 from gui import dialogs as messagebox
 from gui.dialogs import boton_ayuda, checkbox_modo_prueba
 from gui.log_viewer import crear_visor_log
-from gui.collapsible import crear_seccion_plegable
 
 
 def build(notebook, ctx):
@@ -29,21 +28,17 @@ def build(notebook, ctx):
     except Exception:
         dw_cfg = config.get("didww_renovacion_config", {})
 
-    # Por comodidad, si todavía no se configuró un Webhook propio para
-    # este monitor, se sugiere el mismo que ya esté guardado para Cargas
-    # VOIP o Tickets (normalmente es la misma cuenta de Bitrix24).
-    if not dw_cfg.get("bitrix_webhook_url"):
-        dw_cfg["bitrix_webhook_url"] = (
-            config.get("cargas_voip_config", {}).get("bitrix_webhook_url", "")
-            or config.get("auto_like_tickets_config", {}).get("bitrix_webhook_url", "")
-        )
-
-    conexion_wrapper, conexion_frame = crear_seccion_plegable(tab_didww, "🔌  Conexión Bitrix24")
+    conexion_wrapper, conexion_frame = ctx.seccion_plegable(tab_didww, "🔌  Conexión Bitrix24", "didww.conexion")
     conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
-    ttk.Label(conexion_frame, text="Webhook URL:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
-    dw_webhook_var = tk.StringVar(value=dw_cfg.get("bitrix_webhook_url", ""))
-    ttk.Entry(conexion_frame, textvariable=dw_webhook_var, width=55).grid(row=0, column=1, columnspan=3, padx=15, pady=5, sticky="we")
+    fila_webhook_dw = ttk.Frame(conexion_frame)
+    fila_webhook_dw.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
+    ttk.Label(
+        fila_webhook_dw,
+        text="ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración.",
+        foreground="#9399b2", font=("Segoe UI", 9)
+    ).pack(side="left")
+    ttk.Button(fila_webhook_dw, text="Ir a Configuración", command=lambda: notebook.select(notebook.tabs()[-1])).pack(side="left", padx=(10, 0))
 
     fila_chat_dw = ttk.Frame(conexion_frame)
     fila_chat_dw.grid(row=1, column=0, sticky="w", pady=5)
@@ -86,7 +81,6 @@ def build(notebook, ctx):
             return
 
         config["didww_renovacion_config"] = {
-            "bitrix_webhook_url": dw_webhook_var.get().strip(),
             "chat_id": dw_chat_var.get().strip(),
             "poll_interval": poll_interval,
             "dry_run": bool(dw_dry_run_var.get()),
@@ -115,8 +109,8 @@ def build(notebook, ctx):
         if monitor.running:
             messagebox.showinfo("Renovación DIDWW", "El monitor ya está en ejecución.")
             return
-        if not config.get("didww_renovacion_config", {}).get("bitrix_webhook_url", "").strip():
-            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 y guarda los cambios.")
+        if not config.get("bitrix_webhook_url", "").strip():
+            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 en la pestaña Configuración.")
             return
         if not config.get("didww_renovacion_config", {}).get("chat_id", "").strip():
             messagebox.showerror("Error", "Configura primero el Chat de renovaciones y guarda los cambios.")

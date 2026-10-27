@@ -18,7 +18,6 @@ from tkinter import ttk
 
 from core import didww_store as store
 from gui import dialogs as messagebox
-from gui.collapsible import crear_seccion_plegable
 
 
 def build(notebook, ctx):
@@ -340,7 +339,7 @@ def build(notebook, ctx):
     # ==================================================================
     # SUB-PESTAÑA: Número específico
     # ==================================================================
-    frm_wrapper, frm = crear_seccion_plegable(tab_puntual, "🔎  Buscar números disponibles")
+    frm_wrapper, frm = ctx.seccion_plegable(tab_puntual, "🔎  Buscar números disponibles", "tienda_did.puntual_buscar")
     frm_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
     ttk.Label(frm, text="País:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
@@ -524,7 +523,7 @@ def build(notebook, ctx):
     # ==================================================================
     # SUB-PESTAÑA: Aleatorio
     # ==================================================================
-    frm_r_wrapper, frm_r = crear_seccion_plegable(tab_random, "🎲  Buscar prefijos para compra aleatoria")
+    frm_r_wrapper, frm_r = ctx.seccion_plegable(tab_random, "🎲  Buscar prefijos para compra aleatoria", "tienda_did.random_buscar")
     frm_r_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
     ttk.Label(frm_r, text="País:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)

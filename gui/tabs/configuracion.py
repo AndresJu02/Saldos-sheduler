@@ -11,7 +11,6 @@ from tkinter import ttk, filedialog
 from core.chrome_tools import get_installed_versions, update_chrome_stack
 from gui import dialogs as messagebox
 from gui.dialogs import boton_ayuda
-from gui.collapsible import crear_seccion_plegable
 
 
 def build(notebook, ctx):
@@ -23,8 +22,63 @@ def build(notebook, ctx):
     tab_config = ttk.Frame(notebook)
     notebook.add(tab_config, text="   Configuración   ")
 
-    cred_wrapper, cred_frame = crear_seccion_plegable(tab_config, "🔑  Archivo de credenciales")
-    cred_wrapper.pack(fill="x", padx=10, pady=(15, 10))
+    # ---------------- Webhook de Bitrix24 (compartido) ----------------
+    # Cargas VOIP, Tickets, Renovación DIDWW y Notificaciones usan este
+    # mismo Webhook -antes cada pestaña tenía su propio campo, pero las 4
+    # terminaban apuntando a la misma cuenta de Bitrix24-. Se configura
+    # una sola vez aquí.
+    bitrix_wrapper, bitrix_frame = ctx.seccion_plegable(tab_config, "🔌  Webhook de Bitrix24", "configuracion.bitrix")
+    bitrix_wrapper.pack(fill="x", padx=10, pady=(15, 10))
+
+    bitrix_webhook_var = tk.StringVar(value=config.get("bitrix_webhook_url", ""))
+
+    def guardar_bitrix_webhook():
+        config["bitrix_webhook_url"] = bitrix_webhook_var.get().strip()
+        save_config(config)
+        messagebox.showinfo("Guardado", "Webhook de Bitrix24 actualizado.")
+
+    def ayuda_webhook_bitrix():
+        win = tk.Toplevel(root)
+        win.title("Cómo obtener el Webhook URL de Bitrix24")
+        win.geometry("600x480")
+        win.configure(bg=BG)
+        texto = (
+            "1. Entra a tu portal de Bitrix24 (ej: tuempresa.bitrix24.es).\n"
+            "2. En el menú lateral, ve a 'Más' → 'Mercado' (o busca 'Webhooks' con la "
+            "lupa de arriba).\n"
+            "3. Entra a 'Desarrollador' → 'Otro' → 'Webhooks'.\n"
+            "4. Pestaña 'Entrante' → botón 'Agregar webhook entrante'.\n\n"
+            "PERMISOS:\n"
+            "5. En 'Permisos de acceso (scope)', marca al menos "
+            "'Mensajería instantánea y chats (im)' -es lo único que usan Cargas VOIP, "
+            "Tickets, Renovación DIDWW y Notificaciones-.\n"
+            "6. Guarda el webhook.\n\n"
+            "COPIAR LA URL:\n"
+            "7. Bitrix24 te muestra una URL con esta forma:\n"
+            "   https://tuempresa.bitrix24.es/rest/13/xxxxxxxxxxxxxxxx/\n"
+            "8. Copia esa URL completa y pégala aquí arriba, en 'Webhook URL'.\n\n"
+            "Nota: el número después de /rest/ es el ID del usuario de Bitrix24 que queda "
+            "'dueño' del webhook -las acciones automáticas (like a tickets, respuestas en "
+            "el chat, etc.) quedan registradas como hechas por ese usuario-."
+        )
+        lbl = ttk.Label(win, text=texto, justify="left", wraplength=560)
+        lbl.pack(padx=15, pady=15)
+        ttk.Button(win, text="Cerrar", command=win.destroy).pack(pady=10)
+
+    row_bitrix = ttk.Frame(bitrix_frame)
+    row_bitrix.pack(fill="x")
+    ttk.Label(row_bitrix, text="Webhook URL:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
+    ttk.Entry(row_bitrix, textvariable=bitrix_webhook_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
+    ttk.Button(row_bitrix, text="Guardar", command=guardar_bitrix_webhook, style="Accent.TButton").pack(side="left", padx=3)
+    ttk.Button(row_bitrix, text="❓  ¿De dónde lo saco?", command=ayuda_webhook_bitrix).pack(side="left", padx=3)
+    ttk.Label(
+        bitrix_frame,
+        text="Lo usan: Cargas VOIP, Tickets, Renovación DIDWW y 🔔 Notificaciones.",
+        foreground="#9399b2", font=("Segoe UI", 9)
+    ).pack(anchor="w", pady=(8, 0))
+
+    cred_wrapper, cred_frame = ctx.seccion_plegable(tab_config, "🔑  Archivo de credenciales", "configuracion.credenciales")
+    cred_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     cred_path_var = tk.StringVar(value=config.get("credentials_path", ""))
 
@@ -83,7 +137,7 @@ def build(notebook, ctx):
     # hace falta es refrescar esta entrada cuando se vuelve a esta pestaña
     # (por si se cambió en Proveedores mientras tanto), con el bind de
     # <<NotebookTabChanged>> más abajo.
-    didww_wrapper, didww_frame = crear_seccion_plegable(tab_config, "🔐  API Key de DIDWW")
+    didww_wrapper, didww_frame = ctx.seccion_plegable(tab_config, "🔐  API Key de DIDWW", "configuracion.didww_key")
     didww_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     didww_key_var = tk.StringVar(value=config.get("providers_config", {}).get("DIDWW", {}).get("api_key", ""))
@@ -115,7 +169,7 @@ def build(notebook, ctx):
         add="+"
     )
 
-    url_wrapper, url_frame = crear_seccion_plegable(tab_config, "🌐  URL de Google Sheets")
+    url_wrapper, url_frame = ctx.seccion_plegable(tab_config, "🌐  URL de Google Sheets", "configuracion.google_sheets")
     url_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     sheet_url_var = tk.StringVar(value=config.get("google_sheet_url", ""))
@@ -132,7 +186,7 @@ def build(notebook, ctx):
     ttk.Button(row_url, text="Guardar URL", command=guardar_url, style="Accent.TButton").pack(side="left", padx=3)
 
     # ---------------- ChromeDriver / Chrome ----------------
-    driver_wrapper, driver_frame = crear_seccion_plegable(tab_config, "🧭  Chrome / ChromeDriver")
+    driver_wrapper, driver_frame = ctx.seccion_plegable(tab_config, "🧭  Chrome / ChromeDriver", "configuracion.chrome_driver")
     driver_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     def _version_label_text():

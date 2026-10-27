@@ -70,6 +70,7 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
 
 from core.logging_tools import configurar_logger_rotativo
+from core.config import get_shared_webhook_url
 from remote_lock import verificar_bloqueo
 
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
@@ -86,7 +87,6 @@ DIDWW_LINEA_RE = re.compile(r"\(\s*didww\s*\)\s*:?\s*([\d][\d\s.\-]{4,20}\d)", r
 RENOVAR_RE = re.compile(r"\brenovar\b", re.IGNORECASE)
 
 DEFAULT_DIDWW_RENOVACION_CONFIG = {
-    "bitrix_webhook_url": "",
     "chat_id": "",
     "poll_interval": 30,
     "dry_run": True,
@@ -110,6 +110,7 @@ def load_didww_renovacion_config() -> dict:
     DIDWW se toma de providers_config.DIDWW.api_key (la misma que ya usa
     la pestaña "Proveedores" para consultar saldo), no se duplica aquí."""
     cfg = DEFAULT_DIDWW_RENOVACION_CONFIG.copy()
+    cfg["bitrix_webhook_url"] = ""
     cfg["didww_api_key"] = os.environ.get("DIDWW_API_KEY", "")
 
     if CONFIG_FILE.exists():
@@ -124,15 +125,7 @@ def load_didww_renovacion_config() -> dict:
             if api_key:
                 cfg["didww_api_key"] = api_key
 
-            # Si todavía no se configuró un Webhook propio para este
-            # monitor, se sugiere el mismo que ya esté guardado para
-            # Cargas VOIP o Tickets (normalmente es la misma cuenta de
-            # Bitrix24), igual que hace la pestaña "Tickets".
-            if not cfg.get("bitrix_webhook_url"):
-                cfg["bitrix_webhook_url"] = (
-                    full_cfg.get("cargas_voip_config", {}).get("bitrix_webhook_url", "")
-                    or full_cfg.get("auto_like_tickets_config", {}).get("bitrix_webhook_url", "")
-                )
+            cfg["bitrix_webhook_url"] = get_shared_webhook_url(full_cfg)
         except Exception:
             pass
 

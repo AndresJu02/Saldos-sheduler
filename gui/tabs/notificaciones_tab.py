@@ -9,7 +9,6 @@ from gui.process_control import ManagedProcess
 from gui import dialogs as messagebox
 from gui.dialogs import boton_ayuda
 from gui.log_viewer import crear_visor_log
-from gui.collapsible import crear_seccion_plegable
 
 
 def build(notebook, ctx):
@@ -20,7 +19,7 @@ def build(notebook, ctx):
     base_dir = ctx.base_dir
 
     tab_notif = ttk.Frame(notebook)
-    notebook.add(tab_notif, text="   Notificaciones   ")
+    notebook.add(tab_notif, text=" 🔔 ")
 
     try:
         import notificaciones_bitrix
@@ -28,18 +27,21 @@ def build(notebook, ctx):
     except Exception:
         nf_cfg = config.get("notificaciones_config", {})
 
-    # Por comodidad, si todavía no se configuró un Webhook propio para
-    # Notificaciones, se sugiere el mismo que ya esté guardado para
-    # Cargas VOIP (normalmente es la misma cuenta de Bitrix24).
-    if not nf_cfg.get("bitrix_webhook_url"):
-        nf_cfg["bitrix_webhook_url"] = config.get("cargas_voip_config", {}).get("bitrix_webhook_url", "")
+    ttk.Label(tab_notif, text="🔔  Notificaciones de Canales Abiertos", font=("Segoe UI", 12, "bold")).pack(
+        anchor="w", padx=10, pady=(15, 0)
+    )
 
-    nf_conexion_wrapper, nf_conexion_frame = crear_seccion_plegable(tab_notif, "🔌  Conexión Bitrix24")
-    nf_conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
+    nf_conexion_wrapper, nf_conexion_frame = ctx.seccion_plegable(tab_notif, "🔌  Conexión Bitrix24", "notificaciones.conexion")
+    nf_conexion_wrapper.pack(fill="x", padx=10, pady=(10, 10))
 
-    ttk.Label(nf_conexion_frame, text="Webhook URL:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
-    nf_webhook_var = tk.StringVar(value=nf_cfg.get("bitrix_webhook_url", ""))
-    ttk.Entry(nf_conexion_frame, textvariable=nf_webhook_var, width=55).grid(row=0, column=1, columnspan=3, padx=15, pady=5, sticky="we")
+    fila_webhook_nf = ttk.Frame(nf_conexion_frame)
+    fila_webhook_nf.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
+    ttk.Label(
+        fila_webhook_nf,
+        text="ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración.",
+        foreground="#9399b2", font=("Segoe UI", 9)
+    ).pack(side="left")
+    ttk.Button(fila_webhook_nf, text="Ir a Configuración", command=lambda: notebook.select(notebook.tabs()[-1])).pack(side="left", padx=(10, 0))
 
     ttk.Label(nf_conexion_frame, text="Mi User ID:", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
     nf_user_var = tk.StringVar(value=str(nf_cfg.get("mi_user_id", "13")))
@@ -70,7 +72,6 @@ def build(notebook, ctx):
             return
 
         config["notificaciones_config"] = {
-            "bitrix_webhook_url": nf_webhook_var.get().strip(),
             "mi_user_id": nf_user_var.get().strip(),
             "poll_interval": poll_interval,
         }
@@ -112,12 +113,22 @@ def build(notebook, ctx):
         if monitor.running:
             messagebox.showinfo("Notificaciones", "El monitor ya está en ejecución.")
             return
-        if not config.get("notificaciones_config", {}).get("bitrix_webhook_url", "").strip():
-            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 y guarda los cambios.")
+        if not config.get("bitrix_webhook_url", "").strip():
+            messagebox.showerror("Error", "Configura primero la Webhook URL de Bitrix24 en la pestaña Configuración.")
             return
 
         monitor.start()
         messagebox.showinfo("Notificaciones", "Monitor iniciado en segundo plano.\nRevisa 'notificaciones_bitrix.log' para ver la actividad.")
+
+    def _nf_autostart():
+        # Este monitor se enciende solo al abrir la aplicación -ver
+        # ctx.register_autostart() y gui/app.py-, sin diálogos: si falta
+        # configuración simplemente no arranca, igual que si el usuario
+        # nunca hubiera tocado el botón "Iniciar Monitor".
+        if not monitor.running and config.get("bitrix_webhook_url", "").strip():
+            monitor.start()
+
+    ctx.register_autostart(_nf_autostart)
 
     def nf_detener():
         monitor.stop()
