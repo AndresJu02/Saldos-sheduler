@@ -7,12 +7,15 @@ quien mantiene el código (esta PC, con Python y el proyecto completo)-.
 Automatiza lo que antes había que hacer a mano cada vez que se quería
 que el lanzador (launcher.py) ofreciera una versión nueva:
 
-  1. Reconstruye el programa (python -m PyInstaller main.spec).
-  2. Arma el .zip con SaldosScheduler.exe + _internal (sin config ni
+  1. Sube en 1 el número de versión que se ve en la esquina inferior de
+     la app (ej. "v2.1" -> "v2.2", ver core/version.py) y lo comitea +
+     sube a GitHub.
+  2. Reconstruye el programa (python -m PyInstaller main.spec).
+  3. Arma el .zip con SaldosScheduler.exe + _internal (sin config ni
      credenciales de esta PC).
-  3. Calcula el siguiente tag de versión (app-v2, app-v3, ...) mirando
-     los Releases que ya existen en GitHub.
-  4. Crea el Release nuevo y sube el .zip como adjunto.
+  4. Calcula el siguiente tag de Release (app-v2, app-v3, ...) mirando
+     los que ya existen en GitHub.
+  5. Crea el Release nuevo y sube el .zip como adjunto.
 
 El token de GitHub se obtiene del mismo lugar de donde Git ya lo saca
 para hacer `git push` (Administrador de credenciales de Windows) -no
@@ -158,6 +161,35 @@ def commit_de_ultima_release():
     return m.group(1) if m else None
 
 
+def incrementar_version(widget):
+    """Sube en 1 el número que se ve en la esquina inferior de la app
+    (ej. "v2.1" -> "v2.2", ver core/version.py) y deja el cambio
+    comiteado -así el .exe que se reconstruye a continuación ya lo
+    incluye, y el commit que queda registrado en el Release corresponde
+    a esta versión nueva, no a la anterior-."""
+    ruta = os.path.join(BASE_DIR, "core", "version.py")
+    with open(ruta, "r", encoding="utf-8") as f:
+        contenido = f.read()
+
+    m = re.search(r'VERSION\s*=\s*"(\d+)\.(\d+)"', contenido)
+    if not m:
+        raise RuntimeError("No se encontró VERSION en core/version.py (¿se modificó el formato?).")
+
+    mayor, menor = int(m.group(1)), int(m.group(2))
+    nueva_version = f"{mayor}.{menor + 1}"
+    contenido_nuevo = contenido[:m.start()] + f'VERSION = "{nueva_version}"' + contenido[m.end():]
+    with open(ruta, "w", encoding="utf-8") as f:
+        f.write(contenido_nuevo)
+
+    subprocess.run(["git", "add", "core/version.py"], cwd=BASE_DIR, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", f"Versión {nueva_version}"],
+        cwd=BASE_DIR, check=True, capture_output=True,
+    )
+    log_a(widget, f"Versión de la app: {nueva_version}.")
+    return nueva_version
+
+
 def reconstruir(widget):
     log_a(widget, "Reconstruyendo el programa (puede tardar un minuto)...")
     resultado = subprocess.run(
@@ -216,7 +248,7 @@ def armar_zip(widget):
     return zip_path
 
 
-def publicar(widget, zip_path, token, commit):
+def publicar(widget, zip_path, token, commit, app_version):
     tag = siguiente_tag()
     log_a(widget, f"Creando Release '{tag}' en GitHub...")
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
@@ -230,7 +262,7 @@ def publicar(widget, zip_path, token, commit):
         headers=headers,
         json={
             "tag_name": tag,
-            "name": f"SaldosScheduler app {tag}",
+            "name": f"SaldosScheduler app {tag} (v{app_version})",
             "body": cuerpo,
             "draft": False,
             "prerelease": False,
@@ -262,10 +294,20 @@ def publicar(widget, zip_path, token, commit):
 
 def ejecutar(widget, boton, commit):
     try:
+        app_version = incrementar_version(widget)
+        commit = commit_actual()  # incrementar_version() ya creó un commit nuevo
+
+        push = subprocess.run(["git", "push", "origin", "main"], cwd=BASE_DIR, capture_output=True, text=True)
+        if push.returncode == 0:
+            log_a(widget, "Cambio de versión subido a GitHub.")
+        else:
+            log_a(widget, f"Aviso: no se pudo subir el commit de versión a GitHub ({push.stderr.strip()[-300:]}); "
+                           f"se continúa igual, pero recuerda hacer `git push` después a mano.")
+
         reconstruir(widget)
         zip_path = armar_zip(widget)
         token = obtener_token()
-        publicar(widget, zip_path, token, commit)
+        publicar(widget, zip_path, token, commit, app_version)
     except Exception as e:
         log_a(widget, "")
         log_a(widget, f"ERROR: {e}")
@@ -289,8 +331,8 @@ def main():
 
     ttk.Label(
         root,
-        text="Reconstruye el programa, arma el paquete y lo publica como Release nuevo en GitHub.\n"
-             "El lanzador de cada PC lo va a detectar solo en su próximo arranque.",
+        text="Sube el número de versión, reconstruye el programa, arma el paquete y lo publica como "
+             "Release nuevo en GitHub.\nEl lanzador de cada PC lo va a detectar solo en su próximo arranque.",
         wraplength=660, justify="left", font=("Segoe UI", 10),
     ).pack(padx=15, pady=(15, 10), anchor="w")
 

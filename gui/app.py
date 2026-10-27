@@ -18,6 +18,7 @@ from gui import dialogs as messagebox
 
 from remote_lock import verificar_bloqueo
 from core.config import load_config, save_config
+from core.version import VERSION
 from core.launch import get_launch_cmd
 from core.paths import BASE_DIR
 
@@ -179,7 +180,7 @@ def run_gui():
     ttk.Button(bottom, text="⚡  Ejecutar Ahora", command=ejecutar_ahora, style="Accent.TButton").pack(side="left", padx=5)
     ttk.Button(bottom, text="Salir", command=on_closing).pack(side="right", padx=5)
 
-    ttk.Label(bottom, text="v2.1 ·by Andres", foreground="#6c7086", font=("Segoe UI", 8)).pack(side="right", padx=10)
+    ttk.Label(bottom, text=f"v{VERSION} ·by Andres", foreground="#6c7086", font=("Segoe UI", 8)).pack(side="right", padx=10)
 
     notebook.pack(fill="both", expand=True, padx=15, pady=(15, 5))
 
