@@ -64,6 +64,48 @@ def obtener_token():
     )
 
 
+def comparar_con_remoto():
+    """Compara el commit local (HEAD) contra origin/main, para detectar
+    si esta PC está desactualizada respecto a GitHub (ej. alguien publicó
+    cambios desde otra PC y acá no se hizo `git pull` todavía) -publicar
+    así subiría una versión vieja, pisando sin querer lo más nuevo.
+
+    Devuelve "al_dia", "atrasado", "adelantado", "divergido", o None si
+    no se pudo verificar (sin internet, etc. -en ese caso no se bloquea,
+    solo no se puede avisar nada-)."""
+    fetch = subprocess.run(
+        ["git", "fetch", "origin", "main"],
+        cwd=BASE_DIR, capture_output=True, text=True, timeout=30,
+    )
+    if fetch.returncode != 0:
+        return None
+
+    local = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=BASE_DIR, capture_output=True, text=True,
+    ).stdout.strip()
+    remoto = subprocess.run(
+        ["git", "rev-parse", "origin/main"], cwd=BASE_DIR, capture_output=True, text=True,
+    ).stdout.strip()
+    if not local or not remoto:
+        return None
+    if local == remoto:
+        return "al_dia"
+
+    local_es_ancestro = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=BASE_DIR,
+    ).returncode == 0
+    if local_es_ancestro:
+        return "atrasado"
+
+    remoto_es_ancestro = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"], cwd=BASE_DIR,
+    ).returncode == 0
+    if remoto_es_ancestro:
+        return "adelantado"
+
+    return "divergido"
+
+
 def siguiente_tag():
     resp = requests.get(f"https://api.github.com/repos/{REPO}/releases", timeout=15)
     resp.raise_for_status()
@@ -243,6 +285,37 @@ def main():
             return mb.askyesno(titulo, texto)
 
     def al_hacer_clic():
+        estado_remoto = comparar_con_remoto()
+
+        if estado_remoto == "atrasado":
+            log_a(log_widget, "AVISO: esta PC está desactualizada respecto a GitHub (hay commits ahí "
+                               "que no tienes acá -ej. los subió otra PC-).")
+            if not preguntar(
+                "Código desactualizado",
+                "Tu copia local está desactualizada respecto a GitHub: hay cambios ahí que esta PC "
+                "no tiene. Publicar así construiría el paquete con código VIEJO, pisando sin querer "
+                "lo más nuevo.\n\nHaz `git pull` antes de continuar.\n\n¿Publicar de todas formas "
+                "(no recomendado)?",
+            ):
+                return
+        elif estado_remoto == "divergido":
+            log_a(log_widget, "AVISO: el código local y el de GitHub tomaron caminos distintos "
+                               "(divergieron) -revisa con git antes de seguir.")
+            if not preguntar(
+                "Código divergido de GitHub",
+                "El código de esta PC y el de GitHub divergieron (cada uno tiene commits que el otro "
+                "no tiene). Publicar así puede generar una versión inconsistente.\n\n"
+                "¿Publicar de todas formas (no recomendado)?",
+            ):
+                return
+        elif estado_remoto == "adelantado":
+            log_a(log_widget, "Nota: esta PC tiene cambios sin subir a GitHub todavía -se van a "
+                               "incluir en el paquete publicado, pero no quedan en el historial de "
+                               "GitHub hasta que hagas push-.")
+        elif estado_remoto is None:
+            log_a(log_widget, "No se pudo verificar contra GitHub (¿sin internet?); se continúa sin "
+                               "comparar.")
+
         commit = commit_actual()
 
         try:
