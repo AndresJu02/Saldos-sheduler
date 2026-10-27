@@ -75,6 +75,44 @@ def siguiente_tag():
     return f"app-v{max(numeros) + 1}"
 
 
+def commit_actual():
+    """Hash corto del commit actual, o None si no se pudo leer. Si hay
+    cambios sin confirmar (git status sucio), se le agrega "-dirty": el
+    build de PyInstaller usa los archivos tal como están en el disco, no
+    el último commit, así que unos cambios sin guardar SÍ hacen que el
+    paquete sea distinto aunque el commit sea el mismo -no deben tratarse
+    como "ya publicado esto"."""
+    resultado = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=BASE_DIR, capture_output=True, text=True,
+    )
+    if resultado.returncode != 0:
+        return None
+    commit = resultado.stdout.strip()
+
+    estado = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=BASE_DIR, capture_output=True, text=True,
+    )
+    if estado.returncode == 0 and estado.stdout.strip():
+        commit += "-dirty"
+    return commit
+
+
+def commit_de_ultima_release():
+    """Lee el commit guardado en el cuerpo de la última publicación (ver
+    el "Commit: <hash>" que arma publicar() más abajo), para poder avisar
+    si no cambió nada de código desde esa vez. Si la última release es
+    vieja y no tiene ese dato (ej. "app-v1", publicada a mano antes de
+    que existiera esto), devuelve None -no hay con qué comparar-."""
+    resp = requests.get(f"https://api.github.com/repos/{REPO}/releases/latest", timeout=15)
+    if resp.status_code != 200:
+        return None
+    body = resp.json().get("body") or ""
+    m = re.search(r"Commit:\s*([0-9a-f]+)", body)
+    return m.group(1) if m else None
+
+
 def reconstruir(widget):
     log_a(widget, "Reconstruyendo el programa (puede tardar un minuto)...")
     resultado = subprocess.run(
@@ -111,10 +149,14 @@ def armar_zip(widget):
     return zip_path
 
 
-def publicar(widget, zip_path, token):
+def publicar(widget, zip_path, token, commit):
     tag = siguiente_tag()
     log_a(widget, f"Creando Release '{tag}' en GitHub...")
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+
+    cuerpo = "Publicado automáticamente con publicar_actualizacion.py. No incluye configuración ni credenciales."
+    if commit:
+        cuerpo += f"\n\nCommit: {commit}"
 
     resp = requests.post(
         f"https://api.github.com/repos/{REPO}/releases",
@@ -122,8 +164,7 @@ def publicar(widget, zip_path, token):
         json={
             "tag_name": tag,
             "name": f"SaldosScheduler app {tag}",
-            "body": "Publicado automáticamente con publicar_actualizacion.py. "
-                    "No incluye configuración ni credenciales.",
+            "body": cuerpo,
             "draft": False,
             "prerelease": False,
         },
@@ -152,12 +193,12 @@ def publicar(widget, zip_path, token):
     log_a(widget, "El lanzador de cada PC va a detectar esta versión solo, la próxima vez que se abra.")
 
 
-def ejecutar(widget, boton):
+def ejecutar(widget, boton, commit):
     try:
         reconstruir(widget)
         zip_path = armar_zip(widget)
         token = obtener_token()
-        publicar(widget, zip_path, token)
+        publicar(widget, zip_path, token, commit)
     except Exception as e:
         log_a(widget, "")
         log_a(widget, f"ERROR: {e}")
@@ -190,27 +231,41 @@ def main():
                           font=("Consolas", 9), wrap="word")
     log_widget.pack(fill="both", expand=True, padx=15, pady=(0, 10))
 
-    def al_hacer_clic():
-        if not messagebox_confirmar():
-            return
-        boton.configure(state="disabled", text="Publicando...")
-        threading.Thread(target=ejecutar, args=(log_widget, boton), daemon=True).start()
-
-    def messagebox_confirmar():
+    def preguntar(titulo, texto):
         try:
             from gui import dialogs as messagebox
-            return messagebox.askyesno(
-                "Confirmar publicación",
-                "Esto va a crear un Release público nuevo en GitHub con la versión actual "
-                "del programa. ¿Continuar?",
-            )
+            return messagebox.askyesno(titulo, texto)
         except Exception:
             import tkinter.messagebox as mb
-            return mb.askyesno(
-                "Confirmar publicación",
-                "Esto va a crear un Release público nuevo en GitHub con la versión actual "
-                "del programa. ¿Continuar?",
-            )
+            return mb.askyesno(titulo, texto)
+
+    def al_hacer_clic():
+        commit = commit_actual()
+
+        try:
+            commit_publicado = commit_de_ultima_release()
+        except Exception:
+            commit_publicado = None  # sin internet, GitHub caído, etc.: no se puede comparar, se sigue igual
+
+        if commit and commit_publicado and commit == commit_publicado:
+            log_a(log_widget, f"Nota: el código actual (commit {commit}) es el mismo que ya está "
+                               f"publicado -no hubo cambios desde la última vez-.")
+            if not preguntar(
+                "Sin cambios desde la última publicación",
+                f"El código de esta PC (commit {commit}) es el mismo que ya publicaste la última vez. "
+                "Publicar de nuevo crearía una versión idéntica a la que ya tiene el lanzador.\n\n"
+                "¿Publicar de todas formas?",
+            ):
+                return
+        elif not preguntar(
+            "Confirmar publicación",
+            "Esto va a crear un Release público nuevo en GitHub con la versión actual "
+            "del programa. ¿Continuar?",
+        ):
+            return
+
+        boton.configure(state="disabled", text="Publicando...")
+        threading.Thread(target=ejecutar, args=(log_widget, boton, commit), daemon=True).start()
 
     boton = ttk.Button(root, text="📦  Publicar actualización", command=al_hacer_clic, style="Accent.TButton")
     boton.pack(pady=(0, 15))
