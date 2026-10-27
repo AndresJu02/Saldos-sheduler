@@ -17,7 +17,7 @@ def verificar_bloqueo() -> bool:
         resp.raise_for_status()
         data = resp.json()
         estado = data.get("estado", 0)
-        if estado == 0:
+        if estado == 1:
             return True   # Bloqueado
         else:
             return False  # Permitido
