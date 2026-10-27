@@ -16,7 +16,7 @@ def verificar_bloqueo() -> bool:
         resp = requests.get(BLOQUEO_URL, timeout=5)
         resp.raise_for_status()
         data = resp.json()
-        estado = data.get("estado", 1)
+        estado = data.get("estado", 0)
         if estado == 1:
             return True   # Bloqueado
         else:
