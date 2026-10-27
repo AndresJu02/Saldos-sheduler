@@ -93,6 +93,7 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
 
 from core.logging_tools import configurar_logger_rotativo
+from core.tesseract_tools import find_tesseract_exe, find_tessdata_dir
 
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
 STATE_FILE = BASE_DIR / "estado_cargas_voip.json"
@@ -335,6 +336,11 @@ def _abrir_hoja_estado(credentials_path, sheet_url):
     import gspread
     creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, _GOOGLE_SHEETS_SCOPE)
     client = gspread.authorize(creds)
+    # A diferencia de las llamadas a Bitrix (que sí tienen timeout), gspread
+    # no pone ninguno por defecto: si Google Sheets se queda sin responder,
+    # esto se cuelga para siempre y congela todo el bucle de run() (nunca
+    # vuelve a consultar Bitrix). Mismo timeout que las llamadas a Bitrix.
+    client.http_client.timeout = 20
     return client.open_by_url(sheet_url).sheet1
 
 
@@ -376,10 +382,19 @@ def _guardar_last_id_compartido(credentials_path, sheet_url, last_id):
 # ---------------------------------------------------------------------------
 # Llamadas a Bitrix24
 # ---------------------------------------------------------------------------
-def _obtener_mensajes(webhook_url, chat_id):
+# Bitrix24 cappea esta llamada en 200 mensajes por página (no hay forma de
+# pedir más en una sola petición, hay que paginar con LAST_ID para eso); un
+# "lookback_n" más alto no sirve de nada si no se pide al menos esa misma
+# cantidad de mensajes, así que el límite real pedido queda entre 50 (lo de
+# siempre) y ese tope.
+BITRIX_MENSAJES_LIMIT_MAX = 200
+
+
+def _obtener_mensajes(webhook_url, chat_id, limit=50):
+    limit = max(50, min(int(limit), BITRIX_MENSAJES_LIMIT_MAX))
     resp = requests.get(
         f"{webhook_url}im.dialog.messages.get",
-        params={"DIALOG_ID": chat_id, "LIMIT": 50},
+        params={"DIALOG_ID": chat_id, "LIMIT": limit},
         timeout=20,
     )
     resp.raise_for_status()
@@ -433,8 +448,19 @@ def _preprocesar_imagen(image_bytes):
     return img.filter(ImageFilter.SHARPEN)
 
 
+# Se resuelve en run(), antes de arrancar el loop principal. Si el paquete
+# de español no quedó en la carpeta oficial de Tesseract (p. ej. porque este
+# equipo no es administrador y la instalación cayó a la carpeta alternativa,
+# ver core/tesseract_tools.py), hay que decirle a Tesseract dónde buscarlo
+# con '--tessdata-dir'; si no, usa el comportamiento por defecto (None).
+_TESSDATA_DIR = None
+
+
 def _ocr_texto(img, psm):
-    return pytesseract.image_to_string(img, lang="spa+eng", config=f"--psm {psm}")
+    config = f"--psm {psm}"
+    if _TESSDATA_DIR:
+        config += f' --tessdata-dir "{_TESSDATA_DIR}"'
+    return pytesseract.image_to_string(img, lang="spa+eng", config=config)
 
 
 # Estas capturas son tiras de una sola fila de tabla, con columnas separadas
@@ -459,27 +485,55 @@ def _extraer_usd_de_imagen(image_bytes, usd_esperado=None, tolerancia_pct=0.5, d
     "3.973"), alcanza con que UNO de los modos lo lea bien para confirmar
     el monto. Si ninguno coincide (o no hay con qué comparar), se devuelve
     el primer candidato encontrado, para que el mensaje de "revisar" siga
-    mostrando una lectura real de la imagen."""
+    mostrando una lectura real de la imagen.
+
+    Ese "primer candidato encontrado" se elige en dos niveles, de más a
+    menos confiable:
+      1. de una pasada donde SÍ se reconoció la fecha (prefijo recortado
+         justo antes de la columna USD);
+      2. si ninguna pasada reconoció la fecha, de cualquier pasada (último
+         recurso).
+    Antes se tomaba la primera pasada que diera cualquier candidato, sin
+    importar el nivel -con una captura real, el modo psm 6 partió la fecha
+    ("2026-1 0-06"), el prefijo quedó sin recortar y agarró el monto en
+    PESOS de la descripción ("$400.000 PESOS") en vez del monto USD real
+    ("122.194"), que sí leían bien otros modos pero llegaban después-."""
     img = _preprocesar_imagen(image_bytes)
 
-    primer_candidato = None
+    primer_candidato = None            # de una pasada con fecha reconocida
+    primer_candidato_fallback = None   # de cualquier pasada (último recurso)
     for psm in OCR_PSM_MODES:
         texto = _ocr_texto(img, psm=psm)
-        if debug:
-            logger.debug("----- TEXTO OCR CRUDO (psm %s) -----\n%s\n----------------------------", psm, texto)
-
         fecha_match = DATE_RE.search(texto)
         prefijo = texto[:fecha_match.start()] if fecha_match else texto
 
-        candidatos = AMOUNT_CANDIDATE_RE.findall(prefijo)
+        # Si el prefijo no quedó recortado por una fecha reconocida, puede
+        # traer colado el monto en PESOS de la descripción del mensaje -que
+        # SIEMPRE viene precedido de "$", a diferencia de la columna USD-.
+        # Se descartan esos candidatos para no confundirlos con el real.
+        candidatos = []
+        for m in AMOUNT_CANDIDATE_RE.finditer(prefijo):
+            if prefijo[:m.start()].rstrip().endswith("$"):
+                continue
+            candidatos.append(m.group())
+
         if debug:
-            logger.debug(f"Candidatos a monto USD (antes de la fecha, psm {psm}): {candidatos}")
+            # Las capturas son una sola fila de tabla, así que el texto
+            # crudo cabe perfectamente en una línea -se compacta así en vez
+            # de volcarlo con saltos de línea propios, que en el archivo de
+            # log quedaban sueltos (sin fecha/nivel) y se veían como ruido
+            # suelto entre el resto de líneas con su timestamp normal.
+            texto_compacto = " ⏎ ".join(l.strip() for l in texto.splitlines() if l.strip())
+            logger.debug(f"[psm {psm}] OCR: {texto_compacto!r} -> candidatos USD: {candidatos}")
 
         if not candidatos:
             continue
 
-        if primer_candidato is None:
-            primer_candidato = _parsear_usd(candidatos[-1])
+        if fecha_match:
+            if primer_candidato is None:
+                primer_candidato = _parsear_usd(candidatos[-1])
+        elif primer_candidato_fallback is None:
+            primer_candidato_fallback = _parsear_usd(candidatos[-1])
 
         if usd_esperado:
             # No alcanza con mirar solo el último candidato: si la fecha no
@@ -497,7 +551,7 @@ def _extraer_usd_de_imagen(image_bytes, usd_esperado=None, tolerancia_pct=0.5, d
                         logger.debug(f"Candidato de psm {psm} coincide con lo esperado ({usd_esperado}): {valor}")
                     return valor
 
-    return primer_candidato
+    return primer_candidato if primer_candidato is not None else primer_candidato_fallback
 
 
 # ---------------------------------------------------------------------------
@@ -709,16 +763,23 @@ def _procesar_mensaje(msg, cfg):
     debug = cfg["debug_ocr"]
     dry_run = bool(cfg.get("dry_run", True))
 
+    msg_id = msg.get("id")
+    if debug:
+        # Separador visual: cada mensaje que se evalúa arranca una sección
+        # propia en el log, para no tener que distinguir a ojo dónde termina
+        # el bloque de OCR de un mensaje y arranca el de otro.
+        logger.debug("── Mensaje %s " + "─" * 40, msg_id)
+
     params = msg.get("params")
     if isinstance(params, dict) and params.get("IS_DELETED") == "Y":
         if debug:
-            logger.debug(f"[mensaje {msg.get('id')}] eliminado, se ignora.")
+            logger.debug("eliminado, se ignora.")
         return
 
     texto = msg.get("text", "") or ""
     m = CARGA_RE.search(texto)
     if debug:
-        logger.debug(f"[mensaje {msg.get('id')}] texto={texto!r} -> "
+        logger.debug(f"texto={texto!r} -> "
                       f"{'COINCIDE con patrón CARGA' if m else 'NO coincide con el patrón CARGA'}")
 
     if not m:
@@ -726,7 +787,6 @@ def _procesar_mensaje(msg, cfg):
 
     pesos = _parsear_numero_latino(m.group(1))
     trm = _parsear_numero_latino(m.group(2))
-    msg_id = msg.get("id")
     fecha_msg = _fecha_del_mensaje(msg)
 
     trm_check = _verificar_trm(trm, fecha_msg, cfg["tolerancia_trm_pct"])
@@ -791,6 +851,9 @@ def run(cfg: dict = None, stop_event=None):
     if cfg.get("tesseract_cmd"):
         pytesseract.pytesseract.tesseract_cmd = cfg["tesseract_cmd"]
 
+    global _TESSDATA_DIR
+    _TESSDATA_DIR = find_tessdata_dir(find_tesseract_exe(cfg.get("tesseract_cmd", "")))
+
     if not cfg.get("bitrix_webhook_url"):
         logger.error("bitrix_webhook_url no configurado.")
         print("ERROR: falta configurar la URL del webhook de Bitrix24 (pestaña 'Cargas VOIP').", flush=True)
@@ -807,6 +870,7 @@ def run(cfg: dict = None, stop_event=None):
     poll_interval = int(cfg.get("poll_interval", 20))
     credentials_path = cfg.get("credentials_path", "")
     estado_sheet_url = cfg.get("estado_sheet_url", "") or ESTADO_SHEET_URL_DEFAULT
+    lookback_n = int(cfg.get("lookback_n", 10) or 10)
 
     # El last_id que realmente importa es el MAYOR entre el local (esta PC)
     # y el compartido (lo que haya dejado la última PC que corrió esto) -
@@ -823,7 +887,7 @@ def run(cfg: dict = None, stop_event=None):
     if estado["last_id"] == 0:
         # Primera ejecución de verdad (ninguna de las PC del equipo ha
         # corrido esto todavía): no reprocesa el historial viejo.
-        mensajes, _ = _obtener_mensajes(cfg["bitrix_webhook_url"], chat_id)
+        mensajes, _ = _obtener_mensajes(cfg["bitrix_webhook_url"], chat_id, limit=lookback_n)
         if mensajes:
             estado["last_id"] = max(int(m["id"]) for m in mensajes)
         logger.info(f"Primera ejecución: arrancando desde el mensaje {estado['last_id']}.")
@@ -832,7 +896,6 @@ def run(cfg: dict = None, stop_event=None):
         _guardar_estado(estado)
         _guardar_last_id_compartido(credentials_path, estado_sheet_url, estado["last_id"])
 
-    lookback_n = int(cfg.get("lookback_n", 10) or 10)
     # Confirmados ya conocidos: local (este PC, vía el CSV de auditoría) +
     # compartido (lo que hayan confirmado las otras PC, vía Sheets). Se
     # cargan una sola vez al arrancar y se van completando en memoria a
@@ -851,7 +914,7 @@ def run(cfg: dict = None, stop_event=None):
 
     while stop_event is None or not stop_event.is_set():
         try:
-            mensajes, _archivos = _obtener_mensajes(cfg["bitrix_webhook_url"], chat_id)
+            mensajes, _archivos = _obtener_mensajes(cfg["bitrix_webhook_url"], chat_id, limit=lookback_n)
             mensajes.sort(key=lambda m: int(m["id"]))
             nuevos = [m for m in mensajes if int(m["id"]) > estado["last_id"]]
 
@@ -893,12 +956,21 @@ def run(cfg: dict = None, stop_event=None):
 
             for msg in nuevos:
                 msg_id = int(msg["id"])
+                # Solo se marca como "confirmado" (para no volver a tocarlo
+                # nunca en la ventana de reintento) si el texto REALMENTE
+                # coincide con el patrón CARGA -antes se marcaba cualquier
+                # mensaje nuevo, coincidiera o no, así que un "CARGA..." sin
+                # el TRM completo (por ejemplo, escrito en dos partes) quedaba
+                # para siempre como "ya confirmado" sin haberse procesado-.
+                es_carga = bool(CARGA_RE.search(msg.get("text", "") or ""))
                 try:
                     if msg_id in ids_confirmados_manualmente:
                         _registrar_confirmacion_manual(msg, cfg)
+                        nuevas_confirmaciones.add(msg_id)
                     else:
                         _procesar_mensaje(msg, cfg)
-                    nuevas_confirmaciones.add(msg_id)
+                        if es_carga:
+                            nuevas_confirmaciones.add(msg_id)
                 except Exception as e:
                     logger.error(f"Error procesando mensaje {msg_id}: {e}")
                 estado["last_id"] = max(estado["last_id"], msg_id)

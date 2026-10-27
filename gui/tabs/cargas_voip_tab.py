@@ -13,6 +13,13 @@ from gui.dialogs import boton_ayuda, checkbox_modo_prueba
 from gui.log_viewer import crear_visor_log
 from gui.collapsible import crear_seccion_plegable
 
+# Debe coincidir con BITRIX_MENSAJES_LIMIT_MAX en cargas_voip.py: Bitrix24
+# no permite traer más de esta cantidad de mensajes por consulta a
+# im.dialog.messages.get, así que no tiene sentido guardar una "ventana de
+# reintento" más alta -el monitor igual la recorta, pero mejor que el campo
+# ya refleje el tope real en vez de mostrar un número que no hace nada-.
+LOOKBACK_MAX = 200
+
 
 def build(notebook, ctx):
     root = ctx.root
@@ -115,8 +122,19 @@ def build(notebook, ctx):
     ).pack(side="left", padx=(0, 6))
     ttk.Label(fila_lookback, text="Ventana de reintento (mensajes atrás):",
               font=("Segoe UI", 10, "bold")).pack(side="left")
-    cv_lookback_var = tk.StringVar(value=str(cv_cfg.get("lookback_n", 10)))
-    ttk.Entry(validacion_frame, textvariable=cv_lookback_var, width=10).grid(row=1, column=3, padx=15, pady=5, sticky="w")
+    cv_lookback_var = tk.StringVar(value=str(min(cv_cfg.get("lookback_n", 10), LOOKBACK_MAX)))
+
+    def _limitar_lookback(_event=None):
+        try:
+            valor = int(cv_lookback_var.get())
+        except ValueError:
+            return  # se valida en serio al guardar; acá solo se recorta si ya es un número
+        if valor > LOOKBACK_MAX:
+            cv_lookback_var.set(str(LOOKBACK_MAX))
+
+    cv_lookback_entry = ttk.Entry(validacion_frame, textvariable=cv_lookback_var, width=10)
+    cv_lookback_entry.grid(row=1, column=3, padx=15, pady=5, sticky="w")
+    cv_lookback_entry.bind("<FocusOut>", _limitar_lookback)
 
     cv_dry_run_var = tk.BooleanVar(value=bool(cv_cfg.get("dry_run", True)))
     fila_dry_run = ttk.Frame(validacion_frame)
@@ -245,6 +263,9 @@ def build(notebook, ctx):
         except ValueError:
             messagebox.showerror("Error", "La ventana de reintento debe ser un número entero de mensajes.")
             return
+        if lookback_n > LOOKBACK_MAX:
+            lookback_n = LOOKBACK_MAX
+            cv_lookback_var.set(str(lookback_n))
 
         config["cargas_voip_config"] = {
             "bitrix_webhook_url": cv_webhook_var.get().strip(),

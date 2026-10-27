@@ -2,8 +2,8 @@
 Provisión de Tesseract OCR: consulta la última versión publicada en
 GitHub, la descarga e instala. Lo usa el monitor de Cargas VOIP.
 """
+import os
 import re
-import subprocess
 import shutil
 import logging
 from pathlib import Path
@@ -77,11 +77,45 @@ def find_tesseract_exe(configured_path: str = ""):
     return None
 
 
+def _fallback_tessdata_dir() -> Path:
+    """
+    Carpeta de tessdata alternativa, en el perfil del usuario (no requiere
+    permisos de administrador). Se usa cuando no se puede copiar
+    spa.traineddata a la carpeta oficial dentro de 'Program Files', como
+    ocurre si la cuenta de Windows de ese equipo no es administradora y
+    cancela (o no puede completar) el aviso de permisos (UAC).
+    """
+    base = os.environ.get("LOCALAPPDATA")
+    return (Path(base) if base else BASE_DIR) / "SaldosScheduler" / "tessdata"
+
+
+def find_tessdata_dir(exe_path: str):
+    """
+    Devuelve la carpeta tessdata a pasarle a Tesseract vía '--tessdata-dir'
+    cuando el español NO está en la carpeta oficial junto al exe (porque se
+    instaló en la alternativa de _fallback_tessdata_dir). Devuelve None si
+    la carpeta oficial ya sirve tal cual (comportamiento por defecto de
+    Tesseract, sin necesidad de este flag) o si no hay español en ningún lado.
+    """
+    if not exe_path:
+        return None
+    if (Path(exe_path).parent / "tessdata" / "spa.traineddata").is_file():
+        return None
+    fallback = _fallback_tessdata_dir()
+    if (fallback / "spa.traineddata").is_file() and (fallback / "eng.traineddata").is_file():
+        return fallback
+    return None
+
+
 def has_spanish_traineddata(exe_path: str) -> bool:
-    """True si junto al tesseract.exe indicado ya existe tessdata/spa.traineddata."""
+    """True si Tesseract puede leer español: spa.traineddata junto al exe
+    (instalación oficial), o en la carpeta alternativa (ver find_tessdata_dir)."""
     if not exe_path:
         return False
-    return (Path(exe_path).parent / "tessdata" / "spa.traineddata").is_file()
+    if (Path(exe_path).parent / "tessdata" / "spa.traineddata").is_file():
+        return True
+    fallback = _fallback_tessdata_dir()
+    return (fallback / "spa.traineddata").is_file() and (fallback / "eng.traineddata").is_file()
 
 
 def _elevated_copy(src: Path, dst: Path, wait_seconds: int = 90) -> bool:
@@ -107,12 +141,80 @@ def _elevated_copy(src: Path, dst: Path, wait_seconds: int = 90) -> bool:
     return dst.is_file()
 
 
+def _run_elevated(exe_path: Path, params: str, wait_seconds: int = 300) -> bool:
+    """
+    Ejecuta exe_path pidiendo elevación (UAC) vía ShellExecute "runas", y
+    ESPERA a que termine.
+
+    Esto es necesario (y no un simple subprocess.run) porque el instalador
+    oficial de Tesseract exige administrador en su propio manifiesto
+    (así instala Inno Setup cuando el destino es 'Program Files'). Windows
+    solo ofrece elevar un programa así cuando se lanza vía ShellExecute,
+    que es lo que hace Explorer al doble clic; lanzado con
+    subprocess.run/CreateProcess (como hacía antes este código), Windows lo
+    rechaza al instante con "WinError 740: se requiere elevación", sin
+    mostrar ningún aviso ni instalar nada; por eso el botón nunca llegaba a
+    instalar el paquete de español (se detenía aquí, en silencio).
+
+    Devuelve True si el proceso se lanzó y terminó (sin importar su código
+    de salida); False si el usuario canceló el aviso de UAC, si falló al
+    lanzarlo, o si no terminó dentro de wait_seconds.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("fMask", ctypes.c_ulong),
+            ("hwnd", wintypes.HWND),
+            ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HINSTANCE),
+            ("lpIDList", ctypes.c_void_p),
+            ("lpClass", wintypes.LPCWSTR),
+            ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD),
+            ("hIcon", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+
+    SEE_MASK_NOCLOSEPROCESS = 0x00000040
+    SW_SHOWNORMAL = 1
+
+    sei = SHELLEXECUTEINFOW()
+    sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFOW)
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS
+    sei.lpVerb = "runas"
+    sei.lpFile = str(exe_path)
+    sei.lpParameters = params
+    sei.nShow = SW_SHOWNORMAL
+
+    if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei)):
+        return False  # el usuario canceló el aviso de UAC, o falló al lanzarlo
+    if not sei.hProcess:
+        return True  # se lanzó pero no dio handle para esperar (poco común)
+
+    ctypes.windll.kernel32.WaitForSingleObject(sei.hProcess, wait_seconds * 1000)
+    ctypes.windll.kernel32.CloseHandle(sei.hProcess)
+    return True
+
+
 def ensure_spanish_traineddata(exe_path: str, progress_cb=None) -> bool:
     """
-    Se asegura de que exista tessdata/spa.traineddata junto al tesseract.exe
-    indicado; si falta, lo descarga y lo copia (pidiendo permisos de
-    administrador con UAC si la carpeta tessdata no es escribible, como
-    ocurre en la instalación por defecto dentro de Program Files).
+    Se asegura de que Tesseract pueda leer español: si falta
+    spa.traineddata, lo descarga y lo instala, primero intentando la
+    carpeta oficial junto al tesseract.exe indicado (pidiendo permisos de
+    administrador con UAC si no es escribible, como ocurre en la
+    instalación por defecto dentro de Program Files). Si esa elevación no
+    se puede completar -por ejemplo porque la cuenta de Windows de ese
+    equipo no es administradora-, instala en una carpeta alternativa en el
+    perfil del usuario que no requiere privilegios especiales (ver
+    find_tessdata_dir(); quien llame a Tesseract debe pasarle esa carpeta
+    con '--tessdata-dir' cuando aplique).
     """
     def log(msg):
         logger.info(msg)
@@ -121,35 +223,62 @@ def ensure_spanish_traineddata(exe_path: str, progress_cb=None) -> bool:
 
     if not exe_path:
         return False
-    dest = Path(exe_path).parent / "tessdata" / "spa.traineddata"
-    if dest.is_file():
+    official_dir = Path(exe_path).parent / "tessdata"
+    fallback_dir = _fallback_tessdata_dir()
+    if (official_dir / "spa.traineddata").is_file():
+        return True
+    if (fallback_dir / "spa.traineddata").is_file() and (fallback_dir / "eng.traineddata").is_file():
         return True
 
     log("Descargando paquete de idioma español (spa.traineddata)...")
     tmp_path = BASE_DIR / "spa.traineddata"
-    download_file(SPA_TRAINEDDATA_URL, tmp_path)
+    try:
+        download_file(SPA_TRAINEDDATA_URL, tmp_path)
+    except Exception as e:
+        log(f"No se pudo descargar el paquete de español ({e}). Revisa la "
+            "conexión a internet de este equipo, o si el firewall/antivirus "
+            "está bloqueando 'raw.githubusercontent.com'.")
+        return False
 
     try:
+        dest = official_dir / "spa.traineddata"
         try:
             shutil.copy2(tmp_path, dest)
+            log("Paquete de español instalado correctamente.")
+            return dest.is_file()
         except PermissionError:
             log("Se requieren permisos de administrador para copiar a "
-                f"'{dest.parent}'; solicitando elevación (UAC)...")
-            if not _elevated_copy(tmp_path, dest):
-                log("No se pudo instalar el paquete de español (se canceló "
-                    "el aviso de permisos, o falló la copia). Tesseract "
-                    "seguirá reconociendo solo en inglés.")
-                return False
+                f"'{official_dir}'; solicitando elevación (UAC)...")
+            if _elevated_copy(tmp_path, dest) and dest.is_file():
+                log("Paquete de español instalado correctamente.")
+                return True
+            log("No se pudo instalar el paquete de español en la carpeta "
+                "oficial (se canceló el aviso de permisos, o esta cuenta de "
+                "Windows no es administradora). Se instalará en una carpeta "
+                "alternativa que no requiere permisos especiales.")
+
+        # Alternativa sin privilegios: copia spa + eng.traineddata (el que
+        # ya trae el instalador oficial) a una carpeta propia del usuario,
+        # ya que al usar '--tessdata-dir' Tesseract deja de buscar en la
+        # carpeta oficial para TODos los idiomas, no solo el que faltaba.
+        try:
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(tmp_path, fallback_dir / "spa.traineddata")
+            eng_src = official_dir / "eng.traineddata"
+            if eng_src.is_file():
+                shutil.copy2(eng_src, fallback_dir / "eng.traineddata")
+            ok = (fallback_dir / "spa.traineddata").is_file() and (fallback_dir / "eng.traineddata").is_file()
+            log("Paquete de español instalado correctamente (carpeta alternativa)." if ok else
+                "No se pudo instalar el paquete de español en la carpeta alternativa.")
+            return ok
+        except Exception as e:
+            log(f"No se pudo instalar el paquete de español: {e}")
+            return False
     finally:
         try:
             tmp_path.unlink()
         except Exception:
             pass
-
-    ok = dest.is_file()
-    log("Paquete de español instalado correctamente." if ok else
-        "No se pudo confirmar la instalación del paquete de español.")
-    return ok
 
 
 def install_tesseract(progress_cb=None):
@@ -175,15 +304,15 @@ def install_tesseract(progress_cb=None):
     download_file(url, installer_path)
 
     log("Ejecutando instalador (puede pedir permisos de administrador)...")
+    params = (
+        '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- '
+        r'/DIR="C:\Program Files\Tesseract-OCR"'
+    )
     try:
-        subprocess.run(
-            [
-                str(installer_path),
-                "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
-                r'/DIR=C:\Program Files\Tesseract-OCR',
-            ],
-            timeout=300,
-        )
+        if not _run_elevated(installer_path, params):
+            log("No se pudo iniciar el instalador (se canceló el aviso de "
+                "permisos de administrador, o esta cuenta de Windows no "
+                "puede elevar).")
     finally:
         try:
             installer_path.unlink()
@@ -193,7 +322,14 @@ def install_tesseract(progress_cb=None):
     exe_path = find_tesseract_exe()
     if exe_path:
         log(f"Tesseract {version} instalado en: {exe_path}")
-        ensure_spanish_traineddata(exe_path, progress_cb=progress_cb)
+        try:
+            ensure_spanish_traineddata(exe_path, progress_cb=progress_cb)
+        except Exception as e:
+            # No dejar que un fallo instalando el paquete de español (sin
+            # internet, permisos, etc.) se reporte como si Tesseract mismo
+            # no se hubiera podido instalar: el exe ya quedó instalado.
+            log(f"Tesseract se instaló correctamente, pero no se pudo instalar "
+                f"el paquete de español ({e}). Puedes reintentarlo con el mismo botón.")
     else:
         log("El instalador se ejecutó pero no se encontró tesseract.exe; "
             "si se abrió el asistente, complétalo y vuelve a intentar.")
