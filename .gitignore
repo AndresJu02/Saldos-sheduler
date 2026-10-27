@@ -7,6 +7,8 @@ scheduler_config.json
 # Archivos generados por PyInstaller
 build/
 dist/
+build_launcher/
+dist_launcher/
 *.spec
 
 # Logs y caché de Python
