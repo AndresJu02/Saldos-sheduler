@@ -29,22 +29,15 @@ def build(notebook, ctx):
     al_conexion_wrapper, al_conexion_frame = ctx.seccion_plegable(tab_tickets, "🔌  Conexión Bitrix24", "tickets.conexion")
     al_conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
-    fila_webhook_al = ttk.Frame(al_conexion_frame)
-    fila_webhook_al.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
     ttk.Label(
-        fila_webhook_al,
-        text="ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración.",
+        al_conexion_frame,
+        text="ℹ  El Webhook y el User ID de Bitrix24 se configuran una sola vez en la pestaña Configuración.",
         foreground="#9399b2", font=("Segoe UI", 9)
-    ).pack(side="left")
-    ttk.Button(fila_webhook_al, text="Ir a Configuración", command=lambda: notebook.select(notebook.tabs()[-1])).pack(side="left", padx=(10, 0))
+    ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
 
     ttk.Label(al_conexion_frame, text="Chat de tickets (ID):", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
     al_chat_var = tk.StringVar(value=al_cfg.get("tickets_chat_id", "chat97"))
     ttk.Entry(al_conexion_frame, textvariable=al_chat_var, width=20).grid(row=1, column=1, padx=15, pady=5, sticky="w")
-
-    ttk.Label(al_conexion_frame, text="Mi User ID:", font=("Segoe UI", 10, "bold")).grid(row=1, column=2, sticky="w", pady=5, padx=(20, 0))
-    al_user_var = tk.StringVar(value=str(al_cfg.get("mi_user_id", "13")))
-    ttk.Entry(al_conexion_frame, textvariable=al_user_var, width=10).grid(row=1, column=3, padx=15, pady=5, sticky="w")
     al_conexion_frame.columnconfigure(1, weight=1)
 
     fila_poll = ttk.Frame(al_conexion_frame)
@@ -52,7 +45,7 @@ def build(notebook, ctx):
     boton_ayuda(
         fila_poll,
         "Cuando llegue al chat un mensaje con el formato \"ticket <número> asignado a "
-        "[USER=<id>]...\" y el <id> coincida con 'Mi User ID', la aplicación le da like "
+        "[USER=<id>]...\" y el <id> coincida con 'Mi User ID' (pestaña Configuración), la aplicación le da like "
         "automáticamente. No reacciona a ningún otro tipo de mensaje del chat.",
         titulo="Auto-like de tickets",
     ).pack(side="left", padx=(0, 6))
@@ -66,13 +59,9 @@ def build(notebook, ctx):
         except ValueError:
             messagebox.showerror("Error", "El intervalo de sondeo debe ser un número entero de segundos.")
             return
-        if not al_user_var.get().strip():
-            messagebox.showerror("Error", "Indica tu User ID de Bitrix24.")
-            return
 
         config["auto_like_tickets_config"] = {
             "tickets_chat_id": al_chat_var.get().strip() or "chat97",
-            "mi_user_id": al_user_var.get().strip(),
             "poll_interval": poll_interval,
         }
         save_config(config)

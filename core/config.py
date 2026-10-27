@@ -23,6 +23,11 @@ DEFAULT_CONFIG = {
     # la pestaña Configuración. Ver get_shared_webhook_url() más abajo para
     # la migración desde las configuraciones viejas por módulo.
     "bitrix_webhook_url": "",
+    # User ID de Bitrix24 compartido por Tickets (para no darle like a sus
+    # propias asignaciones) y Notificaciones (para no notificar los
+    # mensajes que uno mismo envía) -antes cada uno tenía su propio campo,
+    # igual que pasaba con el Webhook-. Ver get_shared_mi_user_id().
+    "mi_user_id": "13",
     "enabled_providers": [],
     "providers_config": {},
     "provider_order": [],
@@ -43,7 +48,6 @@ DEFAULT_CONFIG = {
     },
     "auto_like_tickets_config": {
         "tickets_chat_id": "chat97",
-        "mi_user_id": "13",
         "poll_interval": 20
     },
     "didww_renovacion_config": {
@@ -52,7 +56,6 @@ DEFAULT_CONFIG = {
         "dry_run": True
     },
     "notificaciones_config": {
-        "mi_user_id": "13",
         "poll_interval": 15
     }
 }
@@ -74,6 +77,19 @@ def get_shared_webhook_url(full_cfg: dict) -> str:
     return ""
 
 
+def get_shared_mi_user_id(full_cfg: dict) -> str:
+    """User ID de Bitrix24 compartido por Tickets y Notificaciones. Mismo
+    criterio de compatibilidad que get_shared_webhook_url()."""
+    mi_user_id = str(full_cfg.get("mi_user_id") or "").strip()
+    if mi_user_id:
+        return mi_user_id
+    for key in ("auto_like_tickets_config", "notificaciones_config"):
+        legacy = str((full_cfg.get(key) or {}).get("mi_user_id", "")).strip()
+        if legacy:
+            return legacy
+    return "13"
+
+
 def load_config():
     if CONFIG_FILE.exists():
         try:
@@ -87,6 +103,8 @@ def load_config():
             # vieja por módulo -así no hay que volver a pegarlo-.
             if not cfg.get("bitrix_webhook_url"):
                 cfg["bitrix_webhook_url"] = get_shared_webhook_url(cfg)
+            if not str(cfg.get("mi_user_id", "")).strip():
+                cfg["mi_user_id"] = get_shared_mi_user_id(cfg)
             # Normalizar listas que deben ser strings
             cfg["provider_order"] = [str(x).strip() for x in cfg.get("provider_order", [])]
             cfg["enabled_providers"] = [str(x).strip() for x in cfg.get("enabled_providers", [])]

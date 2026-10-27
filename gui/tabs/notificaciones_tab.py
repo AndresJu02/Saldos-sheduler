@@ -34,18 +34,11 @@ def build(notebook, ctx):
     nf_conexion_wrapper, nf_conexion_frame = ctx.seccion_plegable(tab_notif, "🔌  Conexión Bitrix24", "notificaciones.conexion")
     nf_conexion_wrapper.pack(fill="x", padx=10, pady=(10, 10))
 
-    fila_webhook_nf = ttk.Frame(nf_conexion_frame)
-    fila_webhook_nf.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
     ttk.Label(
-        fila_webhook_nf,
-        text="ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración.",
+        nf_conexion_frame,
+        text="ℹ  El Webhook y el User ID de Bitrix24 se configuran una sola vez en la pestaña Configuración.",
         foreground="#9399b2", font=("Segoe UI", 9)
-    ).pack(side="left")
-    ttk.Button(fila_webhook_nf, text="Ir a Configuración", command=lambda: notebook.select(notebook.tabs()[-1])).pack(side="left", padx=(10, 0))
-
-    ttk.Label(nf_conexion_frame, text="Mi User ID:", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
-    nf_user_var = tk.StringVar(value=str(nf_cfg.get("mi_user_id", "13")))
-    ttk.Entry(nf_conexion_frame, textvariable=nf_user_var, width=10).grid(row=1, column=1, padx=15, pady=5, sticky="w")
+    ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
     nf_conexion_frame.columnconfigure(1, weight=1)
 
     fila_poll = ttk.Frame(nf_conexion_frame)
@@ -54,7 +47,8 @@ def build(notebook, ctx):
         fila_poll,
         "Revisa periódicamente los chats de \"Canales abiertos\" de Bitrix24 y muestra una "
         "notificación de Windows (como las de WhatsApp) cuando aparece un chat nuevo o llega "
-        "un mensaje nuevo. No se notifican los mensajes que tú mismo envíes (según 'Mi User ID').",
+        "un mensaje nuevo. No se notifican los mensajes que tú mismo envíes (según 'Mi User ID', "
+        "pestaña Configuración).",
         titulo="Notificaciones de Canales abiertos",
     ).pack(side="left", padx=(0, 6))
     ttk.Label(fila_poll, text="Intervalo de sondeo (s):", font=("Segoe UI", 10, "bold")).pack(side="left")
@@ -67,12 +61,8 @@ def build(notebook, ctx):
         except ValueError:
             messagebox.showerror("Error", "El intervalo de sondeo debe ser un número entero de segundos.")
             return
-        if not nf_user_var.get().strip():
-            messagebox.showerror("Error", "Indica tu User ID de Bitrix24.")
-            return
 
         config["notificaciones_config"] = {
-            "mi_user_id": nf_user_var.get().strip(),
             "poll_interval": poll_interval,
         }
         save_config(config)

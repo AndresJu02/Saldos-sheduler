@@ -31,14 +31,11 @@ def build(notebook, ctx):
     conexion_wrapper, conexion_frame = ctx.seccion_plegable(tab_didww, "🔌  Conexión Bitrix24", "didww.conexion")
     conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
-    fila_webhook_dw = ttk.Frame(conexion_frame)
-    fila_webhook_dw.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
     ttk.Label(
-        fila_webhook_dw,
+        conexion_frame,
         text="ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración.",
         foreground="#9399b2", font=("Segoe UI", 9)
-    ).pack(side="left")
-    ttk.Button(fila_webhook_dw, text="Ir a Configuración", command=lambda: notebook.select(notebook.tabs()[-1])).pack(side="left", padx=(10, 0))
+    ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
 
     fila_chat_dw = ttk.Frame(conexion_frame)
     fila_chat_dw.grid(row=1, column=0, sticky="w", pady=5)

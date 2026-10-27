@@ -65,14 +65,11 @@ def build(notebook, ctx):
     conexion_wrapper, conexion_frame = ctx.seccion_plegable(cv_content, "🔌  Chat de Bitrix24", "cargas_voip.conexion")
     conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
-    fila_webhook_cv = ttk.Frame(conexion_frame)
-    fila_webhook_cv.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
     ttk.Label(
-        fila_webhook_cv,
+        conexion_frame,
         text="ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración.",
         foreground="#9399b2", font=("Segoe UI", 9)
-    ).pack(side="left")
-    ttk.Button(fila_webhook_cv, text="Ir a Configuración", command=lambda: notebook.select(notebook.tabs()[-1])).pack(side="left", padx=(10, 0))
+    ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
 
     ttk.Label(conexion_frame, text="Chat ID:", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
     cv_chat_var = tk.StringVar(value=cv_cfg.get("chat_id", "chat135"))

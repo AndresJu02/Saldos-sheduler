@@ -30,8 +30,11 @@ from gui.tabs import proveedores, cargas_voip_tab, tickets_tab, didww_renovacion
 def run_gui():
     root = tk.Tk()
     root.title("Saldos Scheduler")
-    root.geometry("835x600")
-    root.minsize(850, 500)
+    # Ancho pensado para que quepan las 7 pestañas sin que ttk les recorte
+    # el texto -con 835px (el ancho original, de antes de agregar la
+    # pestaña de Notificaciones) ya no alcanzaba-.
+    root.geometry("950x600")
+    root.minsize(950, 500)
     root.configure(bg="#1e1e2e")
 
     # Centrar ventana

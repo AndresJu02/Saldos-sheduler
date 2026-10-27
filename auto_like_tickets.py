@@ -35,7 +35,7 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
 
 from core.logging_tools import configurar_logger_rotativo
-from core.config import get_shared_webhook_url
+from core.config import get_shared_webhook_url, get_shared_mi_user_id
 from remote_lock import verificar_bloqueo
 
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
@@ -47,7 +47,6 @@ TICKET_ASIGNADO_RE = re.compile(r"ticket\s+\d+\s+asignado\s+a\s+\[USER=(\d+)\]",
 
 DEFAULT_AUTO_LIKE_CONFIG = {
     "tickets_chat_id": "chat97",
-    "mi_user_id": "13",
     "poll_interval": 20,
 }
 
@@ -71,12 +70,12 @@ def load_auto_like_config() -> dict:
     su configuración."""
     cfg = DEFAULT_AUTO_LIKE_CONFIG.copy()
     cfg["bitrix_webhook_url"] = ""
+    cfg["mi_user_id"] = "13"
 
     env_webhook = os.environ.get("BITRIX_WEBHOOK_URL")
+    env_user_id = os.environ.get("MI_USER_ID")
     if os.environ.get("TICKETS_CHAT_ID"):
         cfg["tickets_chat_id"] = os.environ["TICKETS_CHAT_ID"]
-    if os.environ.get("MI_USER_ID"):
-        cfg["mi_user_id"] = os.environ["MI_USER_ID"]
     if os.environ.get("POLL_INTERVAL_SECONDS"):
         cfg["poll_interval"] = int(os.environ["POLL_INTERVAL_SECONDS"])
 
@@ -88,11 +87,14 @@ def load_auto_like_config() -> dict:
                 if v not in ("", None):
                     cfg[k] = v
             cfg["bitrix_webhook_url"] = get_shared_webhook_url(full_cfg)
+            cfg["mi_user_id"] = get_shared_mi_user_id(full_cfg)
         except Exception:
             pass
 
     if env_webhook:
         cfg["bitrix_webhook_url"] = env_webhook
+    if env_user_id:
+        cfg["mi_user_id"] = env_user_id
 
     return cfg
 

@@ -23,6 +23,15 @@ respondió. En la primera ejecución no se notifica nada del historial ya
 existente, solo se toma una foto inicial; a partir de ahí, todo lo nuevo
 sí se notifica.
 
+Al hacer clic en la notificación (ver _click_abrir_bitrix): si ya hay
+una ventana de navegador mostrando el Messenger de Bitrix24 (o cualquier
+página de Bitrix24), se la trae al frente -no se abre una pestaña
+nueva-; si no hay ninguna, ahí sí se abre una. Para que Windows pueda
+"avisarle" a esta función cuando se hace clic (incluso si el monitor ya
+no está corriendo), se usa el mecanismo de protocolo+IPC de winotify
+(Registry/Notifier): ver manejar_click_notificacion() y el branch
+correspondiente en main.py.
+
 Se ejecuta como subproceso en segundo plano, igual que los otros
 monitores de la aplicación.
 """
@@ -32,11 +41,21 @@ import sys
 import json
 import time
 import logging
+import webbrowser
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
-from winotify import Notification
+from winotify import Notifier, Registry
+
+try:
+    import win32gui
+    import win32con
+    import win32process
+    import win32api
+    _PYWIN32_OK = True
+except ImportError:
+    _PYWIN32_OK = False
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = Path(sys.executable).resolve().parent
@@ -44,7 +63,8 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
 
 from core.logging_tools import configurar_logger_rotativo
-from core.config import get_shared_webhook_url
+from core.config import get_shared_webhook_url, get_shared_mi_user_id
+from core.paths import MAIN_SCRIPT_PATH
 from remote_lock import verificar_bloqueo
 
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
@@ -55,7 +75,6 @@ ICON_PATH = BASE_DIR / "icono.ico"
 APP_ID = "Saldos Scheduler - Canales abiertos"
 
 DEFAULT_NOTIFICACIONES_CONFIG = {
-    "mi_user_id": "13",
     "poll_interval": 15,
 }
 
@@ -75,10 +94,10 @@ def load_notificaciones_config() -> dict:
     configura una sola vez en la pestaña Configuración-."""
     cfg = DEFAULT_NOTIFICACIONES_CONFIG.copy()
     cfg["bitrix_webhook_url"] = ""
+    cfg["mi_user_id"] = "13"
 
     env_webhook = os.environ.get("BITRIX_WEBHOOK_URL")
-    if os.environ.get("MI_USER_ID"):
-        cfg["mi_user_id"] = os.environ["MI_USER_ID"]
+    env_user_id = os.environ.get("MI_USER_ID")
     if os.environ.get("POLL_INTERVAL_SECONDS"):
         cfg["poll_interval"] = int(os.environ["POLL_INTERVAL_SECONDS"])
 
@@ -90,11 +109,14 @@ def load_notificaciones_config() -> dict:
                 if v not in ("", None):
                     cfg[k] = v
             cfg["bitrix_webhook_url"] = get_shared_webhook_url(full_cfg)
+            cfg["mi_user_id"] = get_shared_mi_user_id(full_cfg)
         except Exception:
             pass
 
     if env_webhook:
         cfg["bitrix_webhook_url"] = env_webhook
+    if env_user_id:
+        cfg["mi_user_id"] = env_user_id
 
     return cfg
 
@@ -149,19 +171,129 @@ def _texto_preview(texto, longitud=180):
 
 
 # ---------------------------------------------------------------------------
+# Enfocar o abrir el Messenger de Bitrix24 (clic en la notificación)
+# ---------------------------------------------------------------------------
+def _buscar_ventana_bitrix():
+    """Busca una ventana de navegador que ya esté mostrando el Messenger
+    de Bitrix24 (se identifica por el título de esa página: Bitrix24
+    siempre la titula "Mensajería Instantánea", con el contador de no
+    leídos delante). Si no hay ninguna mostrando justo esa página, se
+    acepta cualquier ventana de Bitrix24 -mejor llevar ahí que abrir una
+    pestaña nueva-. Devuelve su hwnd, o None si no encuentra ninguna."""
+    if not _PYWIN32_OK:
+        return None
+
+    mensajeria = []
+    cualquiera = []
+
+    def _cb(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        titulo = win32gui.GetWindowText(hwnd)
+        if not titulo:
+            return
+        if "Mensajería Instantánea" in titulo:
+            mensajeria.append(hwnd)
+        elif "Bitrix24" in titulo:
+            cualquiera.append(hwnd)
+
+    win32gui.EnumWindows(_cb, None)
+    return (mensajeria or cualquiera or [None])[0]
+
+
+def _enfocar_ventana(hwnd):
+    """Trae una ventana al frente. Un proceso en segundo plano normalmente
+    no puede robarle el foco a otra aplicación -Windows lo bloquea a
+    propósito-, salvo que se "adjunte" temporalmente a la cola de eventos
+    de la ventana en primer plano (AttachThreadInput); es el truco
+    estándar para esto."""
+    if win32gui.IsIconic(hwnd):
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+
+    fg_hwnd = win32gui.GetForegroundWindow()
+    current_thread = win32api.GetCurrentThreadId()
+    fg_thread = win32process.GetWindowThreadProcessId(fg_hwnd)[0] if fg_hwnd else 0
+    attached = False
+    try:
+        if fg_thread and fg_thread != current_thread:
+            win32process.AttachThreadInput(current_thread, fg_thread, True)
+            attached = True
+        win32gui.SetForegroundWindow(hwnd)
+        win32gui.BringWindowToTop(hwnd)
+    finally:
+        if attached:
+            win32process.AttachThreadInput(current_thread, fg_thread, False)
+
+
+def _click_abrir_bitrix():
+    """Callback que Windows invoca al hacer clic en la notificación (ver
+    Notifier/Registry más abajo). Sin argumentos -winotify los llama
+    así-: vuelve a leer la configuración para no depender de closures."""
+    try:
+        cfg = load_notificaciones_config()
+        url = _portal_messenger_url(cfg.get("bitrix_webhook_url", ""))
+        if not url:
+            return
+        hwnd = _buscar_ventana_bitrix()
+        if hwnd:
+            _enfocar_ventana(hwnd)
+        else:
+            webbrowser.open(url)
+    except Exception as e:
+        logger.error(f"Error al abrir/enfocar Bitrix24 desde la notificación: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Notificación de escritorio
 # ---------------------------------------------------------------------------
-def _notificar(titulo, mensaje, launch_url):
+def _registry_executable_y_script():
+    """Comando que Windows debe ejecutar al hacer clic en la notificación
+    (se guarda en el Registro, ver winotify.Registry). Hay que citar las
+    rutas a mano -winotify no lo hace-: el intérprete de esta misma PC
+    vive en una carpeta con espacio en el nombre (...\\WINDOWS 11\\...) y
+    sin comillas Windows lo partiría mal."""
+    if getattr(sys, 'frozen', False):
+        return f'"{sys.executable}"', ''
+    else:
+        return f'"{sys.executable}"', f'"{MAIN_SCRIPT_PATH}"'
+
+
+def _crear_notifier():
+    executable, script_path = _registry_executable_y_script()
+    registry = Registry(app_id=APP_ID, executable=executable, script_path=script_path)
+    notifier = Notifier(registry)
+    notifier.register_callback(_click_abrir_bitrix)
+    return notifier
+
+
+def manejar_click_notificacion():
+    """Punto de entrada cuando Windows reabre la aplicación porque se hizo
+    clic en una notificación y el monitor (--notificaciones) ya no estaba
+    corriendo -mientras sigue vivo, en cambio, el clic se le avisa
+    directamente por IPC sin relanzar nada-. Ver el branch
+    correspondiente en main.py."""
     try:
-        n = Notification(
-            app_id=APP_ID,
+        notifier = _crear_notifier()
+        notifier.start()
+    except Exception:
+        # Puede pasar si quedó un archivo de PID de una sesión anterior
+        # que no se cerró bien (ej. el proceso se forzó a terminar desde
+        # el Administrador de tareas): winotify cree que el monitor sigue
+        # vivo e intenta avisarle por una tubería que ya nadie escucha.
+        # En ese caso, se ejecuta la acción directo acá en vez de fallar.
+        _click_abrir_bitrix()
+
+
+def _notificar(notifier, titulo, mensaje):
+    try:
+        notif = notifier.create_notification(
             title=titulo,
             msg=mensaje,
             icon=str(ICON_PATH) if ICON_PATH.exists() else "",
             duration="long",
-            launch=launch_url,
+            launch=_click_abrir_bitrix,
         )
-        n.show()
+        notif.show()
     except Exception as e:
         logger.error(f"No se pudo mostrar la notificación: {e}")
 
@@ -169,7 +301,7 @@ def _notificar(titulo, mensaje, launch_url):
 # ---------------------------------------------------------------------------
 # Un ciclo de sondeo
 # ---------------------------------------------------------------------------
-def _procesar_canales(cfg, estado, primera_vez, launch_url):
+def _procesar_canales(cfg, estado, primera_vez, notifier):
     canales = _obtener_canales_abiertos(cfg["bitrix_webhook_url"])
     mi_user_id = str(cfg.get("mi_user_id", ""))
 
@@ -193,7 +325,7 @@ def _procesar_canales(cfg, estado, primera_vez, launch_url):
                 autor = str(msg.get("author_id", ""))
                 if msg_id and autor != mi_user_id:
                     logger.info(f"Chat nuevo en Canales abiertos: {titulo}")
-                    _notificar(f"Nuevo chat: {titulo}", _texto_preview(msg.get("text")), launch_url)
+                    _notificar(notifier, f"Nuevo chat: {titulo}", _texto_preview(msg.get("text")))
             estado[dialog_id] = msg_id
             continue
 
@@ -201,7 +333,7 @@ def _procesar_canales(cfg, estado, primera_vez, launch_url):
             autor = str(msg.get("author_id", ""))
             if autor != mi_user_id:
                 logger.info(f"Mensaje nuevo en {titulo} (mensaje {msg_id}).")
-                _notificar(titulo, _texto_preview(msg.get("text")), launch_url)
+                _notificar(notifier, titulo, _texto_preview(msg.get("text")))
             estado[dialog_id] = msg_id
 
     _guardar_estado(estado)
@@ -230,15 +362,21 @@ def run(cfg: dict = None, stop_event=None):
         return
 
     poll_interval = int(cfg.get("poll_interval", 15))
-    launch_url = _portal_messenger_url(cfg["bitrix_webhook_url"])
     estado = _cargar_estado()
     primera_vez = not estado
+
+    # notifier.start() deja un hilo escuchando en segundo plano: si el
+    # usuario hace clic en una notificación mientras este monitor sigue
+    # corriendo, el clic llega por ahí (sin relanzar nada); ver
+    # manejar_click_notificacion() para cuando el monitor ya no está vivo.
+    notifier = _crear_notifier()
+    notifier.start()
 
     logger.info(f"Monitoreando Canales abiertos cada {poll_interval}s (usuario del webhook: {cfg.get('mi_user_id')}).")
 
     while stop_event is None or not stop_event.is_set():
         try:
-            _procesar_canales(cfg, estado, primera_vez, launch_url)
+            _procesar_canales(cfg, estado, primera_vez, notifier)
             primera_vez = False
         except Exception as e:
             logger.error(f"Error consultando Bitrix24: {e}")

@@ -37,11 +37,25 @@ def apply_dark_theme(root) -> dict:
     style.configure("TLabelframe", background=BG, foreground=FG, borderwidth=1, relief="solid", bordercolor="#585b70")
     style.configure("TLabelframe.Label", background=BG, foreground=ACCENT, font=("Segoe UI", 11, "bold"))
     style.configure("TNotebook", background=BG, borderwidth=0)
-    style.configure("TNotebook.Tab", background=DARKER, foreground=FG, padding=[18, 8], font=("Segoe UI", 10))
+    # El tema base "clam" trae su PROPIO padding interno para el estado
+    # "selected" (6 4 6 2 -muy angosto-), que pisa cualquier padding que
+    # configuremos acá apenas una pestaña queda seleccionada; se neutraliza
+    # mapeando "selected" al mismo padding que el default, para que no
+    # cambie de ancho visualmente al seleccionarla.
+    #
+    # La causa real de que el texto de las pestañas (Proveedores, Cargas
+    # VOIP, etc.) apareciera recortado al final (reportado 2026-10-27) era
+    # otra: con 7 pestañas, este padding ya no alcanzaba a caber en el
+    # ancho de ventana que había (835px) y ttk comprimía cada pestaña por
+    # debajo del espacio que su propio texto necesitaba. Se arregló
+    # agrandando la ventana (ver root.geometry en gui/app.py) en vez de
+    # angostar más el padding.
+    TAB_PADDING = [18, 8]
+    style.configure("TNotebook.Tab", background=DARKER, foreground=FG, padding=TAB_PADDING, font=("Segoe UI", 10))
     style.map("TNotebook.Tab",
               background=[("selected", ACCENT), ("active", "#45475a")],
               foreground=[("selected", "#1e1e2e")],
-              padding=[("selected", [22, 10])])  # Pestaña más grande al seleccionar
+              padding=[("selected", TAB_PADDING)])
 
     style.configure("Accent.TButton", background=ACCENT, foreground="#1e1e2e", borderwidth=0, padding=[15, 6], font=("Segoe UI", 10, "bold"))
     style.map("Accent.TButton", background=[("active", ACCENT_HOVER), ("disabled", "#585b70")])

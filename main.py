@@ -79,6 +79,14 @@ if __name__ == "__main__":
         elif sys.argv[1] == '--notificaciones':
             import notificaciones_bitrix
             notificaciones_bitrix.run()
+        elif ':' in sys.argv[1]:
+            # No es un argumento nuestro: es Windows reabriendo la app
+            # porque se hizo clic en una notificación de Canales Abiertos
+            # y el monitor ya no estaba corriendo (formato
+            # "<app-id>:<callback>", registrado por winotify). Ver
+            # notificaciones_bitrix.manejar_click_notificacion().
+            import notificaciones_bitrix
+            notificaciones_bitrix.manejar_click_notificacion()
         else:
             print("Argumento desconocido. Use --scheduler, --balance, --cargas-voip, "
                   "--auto-like-tickets, --didww-renovacion o --notificaciones.")

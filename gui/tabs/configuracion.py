@@ -22,20 +22,22 @@ def build(notebook, ctx):
     tab_config = ttk.Frame(notebook)
     notebook.add(tab_config, text="   Configuración   ")
 
-    # ---------------- Webhook de Bitrix24 (compartido) ----------------
+    # ---------------- Conexión Bitrix24 (compartida) ----------------
     # Cargas VOIP, Tickets, Renovación DIDWW y Notificaciones usan este
-    # mismo Webhook -antes cada pestaña tenía su propio campo, pero las 4
-    # terminaban apuntando a la misma cuenta de Bitrix24-. Se configura
-    # una sola vez aquí.
-    bitrix_wrapper, bitrix_frame = ctx.seccion_plegable(tab_config, "🔌  Webhook de Bitrix24", "configuracion.bitrix")
+    # mismo Webhook y User ID -antes cada pestaña tenía su propio campo,
+    # pero todas terminaban apuntando a la misma cuenta de Bitrix24-. Se
+    # configura una sola vez aquí.
+    bitrix_wrapper, bitrix_frame = ctx.seccion_plegable(tab_config, "🔌  Conexión Bitrix24", "configuracion.bitrix")
     bitrix_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
     bitrix_webhook_var = tk.StringVar(value=config.get("bitrix_webhook_url", ""))
+    bitrix_user_id_var = tk.StringVar(value=str(config.get("mi_user_id", "13")))
 
     def guardar_bitrix_webhook():
         config["bitrix_webhook_url"] = bitrix_webhook_var.get().strip()
+        config["mi_user_id"] = bitrix_user_id_var.get().strip() or "13"
         save_config(config)
-        messagebox.showinfo("Guardado", "Webhook de Bitrix24 actualizado.")
+        messagebox.showinfo("Guardado", "Conexión de Bitrix24 actualizada.")
 
     def ayuda_webhook_bitrix():
         win = tk.Toplevel(root)
@@ -69,13 +71,26 @@ def build(notebook, ctx):
     row_bitrix.pack(fill="x")
     ttk.Label(row_bitrix, text="Webhook URL:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
     ttk.Entry(row_bitrix, textvariable=bitrix_webhook_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
-    ttk.Button(row_bitrix, text="Guardar", command=guardar_bitrix_webhook, style="Accent.TButton").pack(side="left", padx=3)
     ttk.Button(row_bitrix, text="❓  ¿De dónde lo saco?", command=ayuda_webhook_bitrix).pack(side="left", padx=3)
+
+    row_bitrix_user = ttk.Frame(bitrix_frame)
+    row_bitrix_user.pack(fill="x", pady=(10, 0))
+    boton_ayuda(
+        row_bitrix_user,
+        "Lo usan Tickets (para no darle like a sus propias asignaciones) y 🔔 Notificaciones "
+        "(para no notificarte tus propios mensajes). Es el ID numérico del usuario de Bitrix24 "
+        "dueño del Webhook -el mismo número que aparece después de /rest/ en la URL de arriba-.",
+        titulo="Mi User ID",
+    ).pack(side="left", padx=(0, 6))
+    ttk.Label(row_bitrix_user, text="Mi User ID:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
+    ttk.Entry(row_bitrix_user, textvariable=bitrix_user_id_var, width=10).pack(side="left", padx=(0, 10))
+    ttk.Button(row_bitrix_user, text="💾  Guardar", command=guardar_bitrix_webhook, style="Accent.TButton").pack(side="left", padx=3)
+
     ttk.Label(
         bitrix_frame,
         text="Lo usan: Cargas VOIP, Tickets, Renovación DIDWW y 🔔 Notificaciones.",
         foreground="#9399b2", font=("Segoe UI", 9)
-    ).pack(anchor="w", pady=(8, 0))
+    ).pack(anchor="w", pady=(10, 0))
 
     cred_wrapper, cred_frame = ctx.seccion_plegable(tab_config, "🔑  Archivo de credenciales", "configuracion.credenciales")
     cred_wrapper.pack(fill="x", padx=10, pady=(0, 10))
