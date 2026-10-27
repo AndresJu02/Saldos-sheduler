@@ -171,6 +171,13 @@ def reconstruir(widget):
     log_a(widget, "Reconstrucción lista.")
 
 
+# Archivos sueltos (no generados por PyInstaller, así que no quedan
+# dentro de _internal) que el programa busca al lado del propio .exe en
+# tiempo de ejecución -ver BASE_DIR en cada módulo-. Si todavía no están
+# en dist/, se copian desde la carpeta del proyecto antes de empaquetar.
+ARCHIVOS_SUELTOS = ["icono.ico", "icono_notificacion.png"]
+
+
 def armar_zip(widget):
     log_a(widget, "Armando el paquete (.zip)...")
     dist_dir = os.path.join(BASE_DIR, "dist")
@@ -182,9 +189,24 @@ def armar_zip(widget):
             "¿Sigue main.spec en modo carpeta (onedir)?"
         )
 
+    for nombre in ARCHIVOS_SUELTOS:
+        destino = os.path.join(dist_dir, nombre)
+        if not os.path.isfile(destino):
+            origen = os.path.join(BASE_DIR, nombre)
+            if os.path.isfile(origen):
+                import shutil
+                shutil.copy2(origen, destino)
+                log_a(widget, f"Copiado {nombre} a dist/ (no estaba).")
+            else:
+                log_a(widget, f"Aviso: falta {nombre} -no se incluirá en el paquete-.")
+
     zip_path = os.path.join(dist_dir, ZIP_NAME)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         zf.write(exe_path, "SaldosScheduler.exe")
+        for nombre in ARCHIVOS_SUELTOS:
+            ruta = os.path.join(dist_dir, nombre)
+            if os.path.isfile(ruta):
+                zf.write(ruta, nombre)
         for root, _dirs, files in os.walk(internal_dir):
             for nombre in files:
                 full = os.path.join(root, nombre)

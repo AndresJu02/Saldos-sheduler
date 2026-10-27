@@ -48,6 +48,16 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 from winotify import Notifier, Registry
 
+# La plantilla por defecto de winotify (ToastImageAndText02) muestra bien
+# el ícono siempre que la imagen sea cuadrada -el .ico original es
+# 179x256 (vertical), por eso se veía recortado-. Se probó cambiar a la
+# plantilla moderna (ToastGeneric + placement="appLogoOverride", el
+# "logito" chico como en WhatsApp/Outlook), pero esa requiere que la app
+# esté registrada como AppUserModelID en Windows -sin eso, Windows la
+# descarta en silencio, ni siquiera llega al Centro de notificaciones-,
+# así que se descartó (probado 2026-10-27). La solución que sí funciona:
+# usar icono_notificacion.png, versión ya recortada/centrada en cuadrado
+# del ícono de la app, con la plantilla de siempre.
 try:
     import win32gui
     import win32con
@@ -70,7 +80,7 @@ from remote_lock import verificar_bloqueo
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
 STATE_FILE = BASE_DIR / "estado_notificaciones.json"
 LOG_FILE = BASE_DIR / "notificaciones_bitrix.log"
-ICON_PATH = BASE_DIR / "icono.ico"
+ICON_PATH = BASE_DIR / "icono_notificacion.png"
 
 APP_ID = "Saldos Scheduler - Canales abiertos"
 

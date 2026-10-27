@@ -75,7 +75,7 @@ def build(notebook, ctx):
                 app_id="Saldos Scheduler - Canales abiertos",
                 title="Notificación de prueba",
                 msg="Si ves esto en la bandeja de Windows, las notificaciones funcionan.",
-                icon=str(base_dir / "icono.ico") if (base_dir / "icono.ico").exists() else "",
+                icon=str(base_dir / "icono_notificacion.png") if (base_dir / "icono_notificacion.png").exists() else "",
                 duration="long",
             ).show()
         except Exception as e:
