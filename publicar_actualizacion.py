@@ -193,7 +193,7 @@ def incrementar_version(widget):
 def reconstruir(widget):
     log_a(widget, "Reconstruyendo el programa (puede tardar un minuto)...")
     resultado = subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "main.spec", "--noconfirm"],
+        [sys.executable, "-m", "PyInstaller", "main.spec", "--noconfirm", "--clean"],
         cwd=BASE_DIR, capture_output=True, text=True,
     )
     if resultado.returncode != 0:
@@ -201,6 +201,37 @@ def reconstruir(widget):
         log_a(widget, resultado.stderr[-2000:])
         raise RuntimeError("Falló la reconstrucción del programa (ver detalle arriba).")
     log_a(widget, "Reconstrucción lista.")
+    _aplanar_dist(widget)
+
+
+def _aplanar_dist(widget):
+    """PyInstaller en modo carpeta SIEMPRE construye en dist/SaldosScheduler/
+    (su comportamiento de fábrica, controlado por el `name=` de COLLECT en
+    main.spec) -no hay forma de pedirle directamente que lo deje plano en
+    dist/-. Acá se mueve el resultado fresco a dist/ y se borra la
+    subcarpeta, cada vez, para que el programa siga viviendo en
+    dist/SaldosScheduler.exe (sin carpeta extra) como se decidió, y para
+    que esto nunca vuelva a desincronizarse (bug real: durante un tiempo
+    el aplanado se había hecho una sola vez a mano, así que cada
+    reconstrucción posterior dejaba la versión fresca en la subcarpeta
+    mientras se seguía empaquetando/publicando el .exe plano viejo, sin
+    ningún error visible -detectado y corregido 2026-10-27-)."""
+    import shutil
+    dist_dir = os.path.join(BASE_DIR, "dist")
+    nested_dir = os.path.join(dist_dir, "SaldosScheduler")
+    if not os.path.isdir(nested_dir):
+        return  # ya está plano (o algo cambió en main.spec); no hay nada que mover
+
+    log_a(widget, "Aplanando dist/SaldosScheduler/ -> dist/ ...")
+    for nombre in os.listdir(nested_dir):
+        origen = os.path.join(nested_dir, nombre)
+        destino = os.path.join(dist_dir, nombre)
+        if os.path.isdir(destino):
+            shutil.rmtree(destino)
+        elif os.path.isfile(destino):
+            os.remove(destino)
+        shutil.move(origen, destino)
+    shutil.rmtree(nested_dir)
 
 
 # Archivos sueltos (no generados por PyInstaller, así que no quedan
