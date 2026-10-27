@@ -50,7 +50,7 @@ def build(notebook, ctx):
     SALDO_REFRESH_MS = 30 * 60 * 1000  # 30 minutos
 
     top_frame = ttk.Frame(tab)
-    top_frame.pack(fill="x", padx=10, pady=(15, 0))
+    top_frame.pack(fill="x", padx=10, pady=(8, 0))
 
     aviso_frame = ttk.Frame(top_frame)
     aviso_frame.pack(side="left", fill="x", expand=True)
@@ -78,7 +78,7 @@ def build(notebook, ctx):
     GRIS_ESTADO = "#9399b2"
 
     inner = ttk.Notebook(tab)
-    inner.pack(fill="both", expand=True, padx=10, pady=10)
+    inner.pack(fill="both", expand=True, padx=10, pady=(3, 10))
 
     tab_puntual = ttk.Frame(inner)
     tab_random = ttk.Frame(inner)
