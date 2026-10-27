@@ -22,12 +22,37 @@ def build(notebook, ctx):
     tab_config = ttk.Frame(notebook)
     notebook.add(tab_config, text="   Configuración   ")
 
+    # La pestaña tiene varias secciones y no todas caben sin agrandar la
+    # ventana, así que se muestra dentro de un canvas con scrollbar
+    # vertical (mismo patrón que Cargas VOIP y Proveedores).
+    config_canvas = tk.Canvas(tab_config, bg=BG, highlightthickness=0)
+    config_vscroll = ttk.Scrollbar(tab_config, orient="vertical", command=config_canvas.yview)
+    config_content = ttk.Frame(config_canvas)
+    config_content_window = config_canvas.create_window((0, 0), window=config_content, anchor="nw")
+    config_content.bind("<Configure>", lambda e: config_canvas.configure(scrollregion=config_canvas.bbox("all")))
+    config_canvas.bind("<Configure>", lambda e: config_canvas.itemconfigure(config_content_window, width=e.width))
+    config_canvas.configure(yscrollcommand=config_vscroll.set)
+    config_canvas.pack(side="left", fill="both", expand=True)
+    config_vscroll.pack(side="right", fill="y")
+
+    def _config_on_mousewheel(event):
+        config_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _config_bind_mousewheel(_event=None):
+        config_canvas.bind_all("<MouseWheel>", _config_on_mousewheel)
+
+    def _config_unbind_mousewheel(_event=None):
+        config_canvas.unbind_all("<MouseWheel>")
+
+    config_canvas.bind("<Enter>", _config_bind_mousewheel)
+    config_canvas.bind("<Leave>", _config_unbind_mousewheel)
+
     # ---------------- Conexión Bitrix24 (compartida) ----------------
     # Cargas VOIP, Tickets, Renovación DIDWW y Notificaciones usan este
     # mismo Webhook y User ID -antes cada pestaña tenía su propio campo,
     # pero todas terminaban apuntando a la misma cuenta de Bitrix24-. Se
     # configura una sola vez aquí.
-    bitrix_wrapper, bitrix_frame = ctx.seccion_plegable(tab_config, "🔌  Conexión Bitrix24", "configuracion.bitrix")
+    bitrix_wrapper, bitrix_frame = ctx.seccion_plegable(config_content, "🔌  Conexión Bitrix24", "configuracion.bitrix")
     bitrix_wrapper.pack(fill="x", padx=10, pady=(15, 10))
 
     bitrix_webhook_var = tk.StringVar(value=config.get("bitrix_webhook_url", ""))
@@ -92,7 +117,7 @@ def build(notebook, ctx):
         foreground="#9399b2", font=("Segoe UI", 9)
     ).pack(anchor="w", pady=(10, 0))
 
-    cred_wrapper, cred_frame = ctx.seccion_plegable(tab_config, "🔑  Archivo de credenciales", "configuracion.credenciales")
+    cred_wrapper, cred_frame = ctx.seccion_plegable(config_content, "🔑  Archivo de credenciales", "configuracion.credenciales")
     cred_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     cred_path_var = tk.StringVar(value=config.get("credentials_path", ""))
@@ -152,7 +177,7 @@ def build(notebook, ctx):
     # hace falta es refrescar esta entrada cuando se vuelve a esta pestaña
     # (por si se cambió en Proveedores mientras tanto), con el bind de
     # <<NotebookTabChanged>> más abajo.
-    didww_wrapper, didww_frame = ctx.seccion_plegable(tab_config, "🔐  API Key de DIDWW", "configuracion.didww_key")
+    didww_wrapper, didww_frame = ctx.seccion_plegable(config_content, "🔐  API Key de DIDWW", "configuracion.didww_key")
     didww_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     didww_key_var = tk.StringVar(value=config.get("providers_config", {}).get("DIDWW", {}).get("api_key", ""))
@@ -184,7 +209,7 @@ def build(notebook, ctx):
         add="+"
     )
 
-    url_wrapper, url_frame = ctx.seccion_plegable(tab_config, "🌐  URL de Google Sheets", "configuracion.google_sheets")
+    url_wrapper, url_frame = ctx.seccion_plegable(config_content, "🌐  URL de Google Sheets", "configuracion.google_sheets")
     url_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     sheet_url_var = tk.StringVar(value=config.get("google_sheet_url", ""))
@@ -201,7 +226,7 @@ def build(notebook, ctx):
     ttk.Button(row_url, text="Guardar URL", command=guardar_url, style="Accent.TButton").pack(side="left", padx=3)
 
     # ---------------- ChromeDriver / Chrome ----------------
-    driver_wrapper, driver_frame = ctx.seccion_plegable(tab_config, "🧭  Chrome / ChromeDriver", "configuracion.chrome_driver")
+    driver_wrapper, driver_frame = ctx.seccion_plegable(config_content, "🧭  Chrome / ChromeDriver", "configuracion.chrome_driver")
     driver_wrapper.pack(fill="x", padx=10, pady=(0, 10))
 
     def _version_label_text():
