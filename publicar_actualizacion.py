@@ -90,8 +90,11 @@ def commit_actual():
         return None
     commit = resultado.stdout.strip()
 
+    # --untracked-files=no: un archivo suelto sin agregar a git (ej. una
+    # captura de pantalla cualquiera en el proyecto) no afecta lo que
+    # arma PyInstaller, así que no debe contar como "cambio pendiente".
     estado = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain", "--untracked-files=no"],
         cwd=BASE_DIR, capture_output=True, text=True,
     )
     if estado.returncode == 0 and estado.stdout.strip():
