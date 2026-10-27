@@ -94,6 +94,7 @@ else:
 
 from core.logging_tools import configurar_logger_rotativo
 from core.tesseract_tools import find_tesseract_exe, find_tessdata_dir
+from remote_lock import verificar_bloqueo
 
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
 STATE_FILE = BASE_DIR / "estado_cargas_voip.json"
@@ -845,6 +846,11 @@ def run(cfg: dict = None, stop_event=None):
     planificador de saldos. `stop_event` (threading.Event) es opcional,
     solo se usa si en algún momento se embebe en un hilo en vez de un
     subproceso aparte."""
+    if verificar_bloqueo():
+        print("\n⚠️  APLICACIÓN BLOQUEADA POR EL ADMINISTRADOR.", flush=True)
+        print("   Contacte al soporte para más información.\n", flush=True)
+        return
+
     cfg = cfg or load_cargas_voip_config()
     _setup_logging(cfg.get("debug_ocr", False))
 

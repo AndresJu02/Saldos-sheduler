@@ -117,6 +117,13 @@ def run_gui():
         if not Path(config.get("credentials_path", "")).exists():
             messagebox.showerror("Error", "Archivo de credenciales no encontrado.")
             return
+        if verificar_bloqueo():
+            messagebox.showwarning(
+                "Aplicación bloqueada",
+                "⚠️  Esta aplicación ha sido bloqueada por el administrador.\n\n"
+                "Contacte al soporte para más información."
+            )
+            return
         import subprocess
         subprocess.Popen(
             ctx.get_launch_cmd(['--balance']),

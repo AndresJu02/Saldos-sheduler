@@ -70,6 +70,7 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
 
 from core.logging_tools import configurar_logger_rotativo
+from remote_lock import verificar_bloqueo
 
 CONFIG_FILE = BASE_DIR / "scheduler_config.json"
 STATE_FILE = BASE_DIR / "estado_didww_renovacion.json"
@@ -483,6 +484,11 @@ def run(cfg: dict = None, stop_event=None):
     otros monitores. `stop_event` (threading.Event) es opcional, solo se
     usa si en algún momento se embebe en un hilo en vez de un subproceso
     aparte."""
+    if verificar_bloqueo():
+        print("\n⚠️  APLICACIÓN BLOQUEADA POR EL ADMINISTRADOR.", flush=True)
+        print("   Contacte al soporte para más información.\n", flush=True)
+        return
+
     cfg = cfg or load_didww_renovacion_config()
     _setup_logging()
 

@@ -18,6 +18,9 @@ Uso típico dentro de una pestaña:
 import subprocess
 from typing import Callable, List, Optional
 
+from remote_lock import verificar_bloqueo
+from gui import dialogs as messagebox
+
 
 class ManagedProcess:
     def __init__(
@@ -52,6 +55,13 @@ class ManagedProcess:
 
     def start(self) -> bool:
         if self.process is not None:
+            return False
+        if verificar_bloqueo():
+            messagebox.showwarning(
+                "Aplicación bloqueada",
+                "⚠️  Esta aplicación ha sido bloqueada por el administrador.\n\n"
+                "Contacte al soporte para más información."
+            )
             return False
         self.process = subprocess.Popen(self._launch_cmd(), creationflags=self.creationflags)
         self._set_running(True)
