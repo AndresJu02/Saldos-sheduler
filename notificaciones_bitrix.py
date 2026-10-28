@@ -379,7 +379,26 @@ def run(cfg: dict = None, stop_event=None):
     # usuario hace clic en una notificación mientras este monitor sigue
     # corriendo, el clic llega por ahí (sin relanzar nada); ver
     # manejar_click_notificacion() para cuando el monitor ya no está vivo.
-    notifier = _crear_notifier()
+    #
+    # _crear_notifier() puede fallar con PermissionError ([WinError 5]
+    # Acceso denegado) si YA hay otra instancia de este mismo monitor
+    # corriendo: winotify arma su tubería (named pipe) de IPC con un
+    # nombre fijo (el app_id), así que una segunda instancia no puede
+    # abrir otra igual -pasa, por ejemplo, si se abrieron dos copias de la
+    # app a la vez, cada una arrancando sola el monitor de notificaciones-.
+    # Antes esto no se atajaba y tiraba abajo todo el proceso con un
+    # diálogo de "Unhandled exception" (reportado 2026-10-28); ahora se
+    # registra en el log y este proceso se cierra solo -la otra instancia
+    # ya se encarga de notificar-.
+    try:
+        notifier = _crear_notifier()
+    except Exception as e:
+        logger.warning(
+            f"No se pudo iniciar el notificador de Canales abiertos -probablemente ya hay otra "
+            f"instancia de este monitor corriendo-: {e}"
+        )
+        print(f"AVISO: no se pudo iniciar (¿ya hay otra instancia corriendo?): {e}", flush=True)
+        return
     notifier.start()
 
     logger.info(f"Monitoreando Canales abiertos cada {poll_interval}s (usuario del webhook: {cfg.get('mi_user_id')}).")
