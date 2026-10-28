@@ -352,14 +352,6 @@ def main():
     root.geometry("700x420")
     root.configure(bg="#1e1e2e")
 
-    try:
-        sys.path.insert(0, BASE_DIR)
-        from gui.theme import apply_dark_theme, apply_dark_titlebar
-        apply_dark_titlebar(root)
-        apply_dark_theme(root)
-    except Exception:
-        pass
-
     ttk.Label(
         root,
         text="Sube el número de versión, reconstruye el programa, arma el paquete y lo publica como "
@@ -372,12 +364,18 @@ def main():
     log_widget.pack(fill="both", expand=True, padx=15, pady=(0, 10))
 
     def preguntar(titulo, texto):
-        try:
-            from gui import dialogs as messagebox
-            return messagebox.askyesno(titulo, texto)
-        except Exception:
-            import tkinter.messagebox as mb
-            return mb.askyesno(titulo, texto)
+        # Antes probaba gui.dialogs.askyesno primero (mismo estilo oscuro
+        # que la app) y caía a tkinter.messagebox solo si fallaba. Pero
+        # gui/dialogs.py ahora es PyQt6 (qfluentwidgets.MessageBox), que
+        # necesita un QApplication corriendo -esta herramienta es tkinter
+        # puro, sin uno-, y construir un QWidget sin QApplication hace que
+        # Qt mate el proceso entero a nivel nativo (no es una excepción de
+        # Python: no hay nada que un try/except pueda atrapar), así que la
+        # ventana se cerraba sola apenas se tocaba "Publicar" -reportado
+        # 2026-10-28-. Esta herramienta es un script aparte de la app (ver
+        # el docstring del archivo), así que usa directo el de tkinter.
+        import tkinter.messagebox as mb
+        return mb.askyesno(titulo, texto)
 
     def al_hacer_clic():
         estado_remoto = comparar_con_remoto()
