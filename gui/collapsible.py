@@ -28,12 +28,33 @@ pantalla). Se descartaron las tres -esta función quedó como estaba
 originalmente- para no dejar ese bug; si se retoma, probar por el lado de
 parchear ExpandBorderWidget en vez de pelear con QSS o con setMask().
 """
-from qfluentwidgets import ExpandGroupSettingCard
+from qfluentwidgets import ExpandGroupSettingCard, SingleDirectionScrollArea
 
 
 def crear_seccion_plegable(icon, titulo, content_widget, abierta_por_defecto=True, on_toggle=None):
     card = ExpandGroupSettingCard(icon, titulo)
     card.addGroupWidget(content_widget)
+
+    # ExpandSettingCard (la clase base de ExpandGroupSettingCard) es en
+    # realidad un QScrollArea -lo usa para animar expandir/contraer, no
+    # para scrollear contenido real- y sobreescribe wheelEvent() con un
+    # simple "pass". Pero un wheelEvent que no hace nada TAMPOCO deja pasar
+    # el evento al padre: la rueda del mouse dejaba de funcionar apenas el
+    # puntero entraba al contenido de una tarjeta expandida -había que
+    # subirlo hasta la franja del encabezado (fuera del área de scroll
+    # interna de la tarjeta) para que la página volviera a scrollear-
+    # (reportado 2026-10-28, en Configuración y en Horarios de ejecución
+    # -cualquier sección armada con esta función-). Se reenvía el evento a
+    # mano al SingleDirectionScrollArea de la página (ver pagina_con_scroll
+    # en gui/widgets.py), reusando su propio scroll suave.
+    def _wheelEvent(e, card=card):
+        area = card.parentWidget()
+        while area is not None and not isinstance(area, SingleDirectionScrollArea):
+            area = area.parentWidget()
+        if area is not None:
+            area.wheelEvent(e)
+        e.accept()
+    card.wheelEvent = _wheelEvent
 
     if on_toggle is not None:
         # toggleExpand() (conectado a expandButton.clicked en __init__ de
