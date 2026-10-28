@@ -10,111 +10,80 @@ NUNCA carga la clave desde un archivo público de GitHub.
 
 Toda compra (número puntual o aleatorio) es una acción REAL con costo en
 la cuenta de DIDWW, por eso siempre se pide confirmación antes de comprar.
-"""
+
+Los países/tipos/ciudades/regiones se buscan escribiendo -EditableComboBox
++ QCompleter (MatchContains) hacen el filtrado en vivo; reemplaza al
+desplegable propio a medida (Toplevel + Listbox) que tenía la versión
+ttk de este archivo, innecesario ahora que Qt ya trae esto resuelto."""
 import threading
-import tkinter as tk
 from datetime import datetime
-from tkinter import ttk
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QStackedWidget, QCompleter
+from qfluentwidgets import (
+    EditableComboBox, ComboBox, PrimaryPushButton, PushButton, TransparentToolButton,
+    BodyLabel, CaptionLabel, StrongBodyLabel, ListWidget, FluentIcon, SegmentedWidget,
+)
 
 from core import didww_store as store
 from gui import dialogs as messagebox
+from gui.widgets import fila_campo, columna, linea_divisoria
+
+VERDE_OK = "#32d74b"
+GRIS_ESTADO = "#9399b2"
 
 
-def build(notebook, ctx):
+def build(ctx):
     root = ctx.root
-    ACCENT = ctx.ACCENT
-    BG = ctx.BG
-    FG = ctx.FG
-    ENTRY_BG = ctx.ENTRY_BG
     config = ctx.config
-
-    def estilizar_listbox(lb):
-        """Los tk.Listbox no son ttk, así que no heredan el tema oscuro solo
-        -quedan blancos-; se colorean a mano con la misma paleta que ya usan
-        Combobox/Treeview (gui/theme.py): fondo azul tenue, texto claro,
-        selección en el color de acento."""
-        lb.configure(
-            bg=ENTRY_BG, fg=FG,
-            selectbackground=ACCENT, selectforeground=BG,
-            highlightthickness=1, highlightbackground="#585b70", highlightcolor="#585b70",
-            relief="flat", bd=0, activestyle="none", font=("Segoe UI", 10),
-        )
-        return lb
-
-    tab = ttk.Frame(notebook)
-    notebook.add(tab, text="   Tienda DID   ")
 
     def api_key():
         return config.get("providers_config", {}).get("DIDWW", {}).get("api_key", "").strip()
 
     SALDO_REFRESH_MS = 30 * 60 * 1000  # 30 minutos
 
-    top_frame = ttk.Frame(tab)
-    top_frame.pack(fill="x", padx=10, pady=(8, 0))
+    page = QWidget()
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(15, 15, 15, 15)
+    layout.setSpacing(10)
 
-    # "Número específico" / "Aleatorio" ya no son sub-pestañas: son botones
-    # arriba, a la par de Saldo DIDWW -antes quedaban más abajo, dejando
-    # vacía toda esta franja superior-. Debajo va un separador que marca
-    # dónde termina esta franja y empieza el contenido de cada modo (ver
-    # modo_frame / modo_separador / modo_container más abajo).
-    modo_frame = ttk.Frame(top_frame)
-    modo_frame.pack(side="left", fill="y", anchor="w")
+    # ------------------------------------------------------------------
+    # Franja superior: modo (Número específico / Aleatorio) + Saldo DIDWW
+    # ------------------------------------------------------------------
+    top_row = QHBoxLayout()
 
-    saldo_frame = ttk.Frame(top_frame)
-    saldo_frame.pack(side="right", anchor="n")
+    modo_pivot = SegmentedWidget()
+    top_row.addWidget(modo_pivot)
+    top_row.addStretch(1)
 
-    saldo_row = ttk.Frame(saldo_frame)
-    saldo_row.pack(anchor="e")
-    saldo_var = tk.StringVar(value="Saldo DIDWW: —")
-    ttk.Label(saldo_row, textvariable=saldo_var, font=("Segoe UI", 10, "bold"), foreground=ACCENT).pack(
-        side="left", padx=(0, 6))
-    btn_saldo_refresh = ttk.Button(saldo_row, text="🔄", width=3)
-    btn_saldo_refresh.pack(side="left")
+    saldo_label = StrongBodyLabel("Saldo DIDWW: —")
+    btn_saldo_refresh = TransparentToolButton(FluentIcon.SYNC)
+    btn_saldo_refresh.setFixedSize(26, 26)
+    top_row.addWidget(saldo_label)
+    top_row.addWidget(btn_saldo_refresh)
+    layout.addLayout(top_row)
 
-    saldo_estado_var = tk.StringVar(value="")
-    lbl_saldo_estado = ttk.Label(saldo_frame, textvariable=saldo_estado_var, font=("Segoe UI", 8))
-    lbl_saldo_estado.pack(anchor="e")
-    VERDE_OK = "#a6e3a1"
-    GRIS_ESTADO = "#9399b2"
+    saldo_estado_label = CaptionLabel("")
+    saldo_estado_row = QHBoxLayout()
+    saldo_estado_row.addStretch(1)
+    saldo_estado_row.addWidget(saldo_estado_label)
+    layout.addLayout(saldo_estado_row)
 
-    ttk.Separator(tab, orient="horizontal").pack(fill="x", padx=10, pady=(8, 0))
+    # ------------------------------------------------------------------
+    # Los dos modos apilados (igual que el tkraise() de la versión ttk):
+    # un QStackedWidget con una página por modo, mismo lugar y ancho.
+    # ------------------------------------------------------------------
+    modo_stack = QStackedWidget()
+    layout.addWidget(modo_stack, 1)
 
-    # Contenedor con los dos modos apilados uno sobre otro (mismo lugar,
-    # mismo ancho): solo se ve el que esté "levantado" con tkraise(), así
-    # que al cambiar de modo no se mueve ni se desalinea nada del resto
-    # del módulo -antes, al ser pestañas separadas, cada una podía quedar
-    # con un ancho/alineación ligeramente distinto-.
-    modo_container = ttk.Frame(tab)
-    modo_container.pack(fill="both", expand=True, padx=10, pady=10)
-    modo_container.columnconfigure(0, weight=1)
-    modo_container.rowconfigure(0, weight=1)
+    tab_puntual = QWidget()
+    tab_random = QWidget()
+    modo_stack.addWidget(tab_puntual)
+    modo_stack.addWidget(tab_random)
 
-    tab_puntual = ttk.Frame(modo_container)
-    tab_random = ttk.Frame(modo_container)
-    tab_puntual.grid(row=0, column=0, sticky="nsew")
-    tab_random.grid(row=0, column=0, sticky="nsew")
-
-    modo_actual = tk.StringVar(value="puntual")
-
-    def seleccionar_modo(modo):
-        modo_actual.set(modo)
-        if modo == "puntual":
-            tab_puntual.tkraise()
-            btn_modo_puntual.configure(style="Accent.TButton")
-            btn_modo_random.configure(style="TButton")
-        else:
-            tab_random.tkraise()
-            btn_modo_random.configure(style="Accent.TButton")
-            btn_modo_puntual.configure(style="TButton")
-
-    btn_modo_puntual = ttk.Button(modo_frame, text="Número específico", style="Accent.TButton",
-                                   command=lambda: seleccionar_modo("puntual"))
-    btn_modo_puntual.pack(side="left", padx=(0, 6))
-    btn_modo_random = ttk.Button(modo_frame, text="Aleatorio",
-                                  command=lambda: seleccionar_modo("random"))
-    btn_modo_random.pack(side="left")
-
-    tab_puntual.tkraise()
+    modo_pivot.addItem(routeKey="puntual", text="Número específico", onClick=lambda: modo_stack.setCurrentWidget(tab_puntual))
+    modo_pivot.addItem(routeKey="random", text="Aleatorio", onClick=lambda: modo_stack.setCurrentWidget(tab_random))
+    modo_pivot.setCurrentItem("puntual")
 
     # ------------------------------------------------------------------
     # Helpers comunes
@@ -132,208 +101,67 @@ def build(notebook, ctx):
             root.after(0, lambda: on_done(resultado, error))
         threading.Thread(target=wrapper, daemon=True).start()
 
+    def nombre_attr(it):
+        return (it.get("attributes") or {}).get("name") or "(sin nombre)"
+
     def set_combo_items(combo, items, text_fn):
-        """Llena un Combobox con `items` (lista de objetos JSON:API con
-        "id"/"attributes"), guardando la lista completa sin filtrar en el
-        propio widget: combo.data (los items originales) y combo.all_values
-        (sus textos), en el mismo orden. selected_item()/selected_id()
-        resuelven el elegido comparando el texto actual contra all_values,
-        así que siguen funcionando aunque el desplegable esté mostrando
-        solo un subconjunto filtrado (ver hacer_combobox_buscable)."""
-        combo.data = items
-        combo.all_values = [text_fn(it) for it in items]
-        combo["values"] = combo.all_values
-        combo.set("")
+        combo.clear()
+        textos = []
+        for it in items:
+            texto = text_fn(it)
+            combo.addItem(texto, userData=it)
+            textos.append(texto)
+        completer = QCompleter(textos, combo)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        combo.setCompleter(completer)
+        combo.setCurrentIndex(-1)
+        combo.clearEditText() if hasattr(combo, "clearEditText") else combo.setText("")
 
     def selected_item(combo):
-        texto = combo.get().strip()
-        todas = getattr(combo, "all_values", None) or []
-        datos = getattr(combo, "data", None)
-        if not texto or not datos or texto not in todas:
-            return None
-        return datos[todas.index(texto)]
+        return combo.currentData()
 
     def selected_id(combo):
         item = selected_item(combo)
         return item["id"] if item else None
 
-    def nombre_attr(it):
-        return (it.get("attributes") or {}).get("name") or "(sin nombre)"
-
-    def hacer_combobox_buscable(combo):
-        """Al hacer clic en la flechita (▼) se abre el desplegable nativo
-        de siempre (con la lista completa); al escribir en el campo, en
-        vez de eso aparece un desplegable propio (un Toplevel sin bordes,
-        debajo del combo) que se va filtrando en vivo con cada letra.
-
-        No se usa el desplegable nativo para esto porque re-"postearlo"
-        (ttk::combobox::Post, la única forma de refrescar sus opciones
-        mientras está abierto) hace un grab interno que manda las
-        siguientes teclas a esa lista en vez de al campo de texto -se
-        probó y se quedaba pegado en la primera letra-. Este desplegable
-        propio no toma foco ni grab, así que se puede seguir escribiendo
-        sin cortes; un clic sobre una opción la selecciona igual."""
-        combo.configure(state="normal")
-
-        popup = tk.Toplevel(root)
-        popup.withdraw()
-        popup.overrideredirect(True)
-        popup.wm_attributes("-topmost", True)
-        popup_list = estilizar_listbox(tk.Listbox(popup, exportselection=False))
-        popup_list.pack(fill="both", expand=True)
-        popup_items = []
-        resaltado = {"idx": -1}  # cuál opción quedaría elegida con Enter/clic
-
-        def ocultar(event=None):
-            popup.withdraw()
-            resaltado["idx"] = -1
-
-        def resaltar(idx):
-            """Marca con el color de acento la opción `idx` -la que se
-            elegiría si se confirma ahora-, para poder identificarla antes
-            de hacer clic. Se usa .selection_set en vez de dejarlo al
-            <<ListboxSelect>> nativo porque ese evento también se dispara
-            solo con el hover/las flechas y confirmaría de una la opción
-            con solo pasar el mouse por encima, que no es lo que se quiere:
-            resaltar y confirmar quedan separados a propósito (ver
-            on_click_item/confirmar)."""
-            if not (0 <= idx < popup_list.size()):
-                return
-            popup_list.selection_clear(0, tk.END)
-            popup_list.selection_set(idx)
-            popup_list.see(idx)
-            resaltado["idx"] = idx
-
-        def mostrar(items):
-            if not items:
-                ocultar()
-                return
-            popup_items.clear()
-            popup_items.extend(items)
-            popup_list.delete(0, tk.END)
-            for it in items:
-                popup_list.insert(tk.END, it)
-            popup_list.configure(height=min(len(items), 8))
-            popup.update_idletasks()
-            x = combo.winfo_rootx()
-            y = combo.winfo_rooty() + combo.winfo_height()
-            w = combo.winfo_width()
-            h = popup_list.winfo_reqheight()
-            popup.geometry(f"{w}x{h}+{x}+{y}")
-            popup.deiconify()
-            popup.lift()
-            resaltar(0)
-
-        def elegir_indice(idx):
-            if not (0 <= idx < len(popup_items)):
-                return
-            combo.set(popup_items[idx])
-            ocultar()
-            combo.focus_set()
-            combo.event_generate("<<ComboboxSelected>>")
-
-        def on_click_item(event):
-            elegir_indice(popup_list.nearest(event.y))
-            return "break"
-
-        def on_motion_item(event):
-            resaltar(popup_list.nearest(event.y))
-
-        def mover(delta):
-            if not popup.winfo_ismapped():
-                return
-            nuevo = resaltado["idx"] + delta
-            resaltar(max(0, min(nuevo, popup_list.size() - 1)))
-            return "break"
-
-        def confirmar(event=None):
-            if popup.winfo_ismapped() and resaltado["idx"] >= 0:
-                elegir_indice(resaltado["idx"])
-                return "break"
-
-        def calcular_filtradas():
-            texto = combo.get().strip().lower()
-            todas = getattr(combo, "all_values", None) or []
-            return [v for v in todas if texto in v.lower()] if texto else todas
-
-        def filtrar(event=None):
-            if event is not None and event.keysym in ("Up", "Down", "Return", "Tab", "Escape"):
-                return
-            filtradas = calcular_filtradas()
-            combo["values"] = filtradas
-            mostrar(filtradas)
-
-        def al_enfocar(event=None):
-            if not combo.get().strip():
-                combo["values"] = getattr(combo, "all_values", None) or []
-
-        def al_perder_foco(event=None):
-            # Se retrasa el cierre: si lo que pasó fue un clic sobre una
-            # opción del propio desplegable, "elegir" ya lo cierra antes
-            # de que este retraso corra; si no, se termina cerrando solo.
-            combo.after(150, ocultar)
-
-        def al_click(event):
-            # ttk identifica la zona del clic dentro del propio widget:
-            # "textarea" es donde se escribe; todo lo demás -"downarrow"
-            # (la flechita ▼) pero también una franja angosta de ~3px
-            # ("padding"/"Combobox.field") justo antes de la flecha- es la
-            # zona de abrir/cerrar el desplegable. Ahí se abre el propio
-            # (filtrado con lo que ya esté escrito) en vez del nativo de
-            # ttk, para que sea el mismo desplegable con búsqueda tanto
-            # escribiendo como con el mouse; un segundo clic ahí lo cierra
-            # (antes solo se cerraba eligiendo una opción).
-            if combo.identify(event.x, event.y) != "textarea":
-                if popup.winfo_ismapped():
-                    ocultar()
-                else:
-                    filtradas = calcular_filtradas()
-                    combo["values"] = filtradas
-                    mostrar(filtradas)
-                return "break"
-
-        popup_list.bind("<Button-1>", on_click_item)
-        popup_list.bind("<Motion>", on_motion_item)
-        combo.bind("<KeyRelease>", filtrar)
-        combo.bind("<FocusIn>", al_enfocar)
-        combo.bind("<FocusOut>", al_perder_foco)
-        combo.bind("<Button-1>", al_click)
-        combo.bind("<Down>", lambda e: mover(1))
-        combo.bind("<Up>", lambda e: mover(-1))
-        combo.bind("<Return>", confirmar)
-        combo.bind("<Escape>", ocultar)
+    def nueva_combo(ancho=220):
+        combo = EditableComboBox()
+        combo.setFixedWidth(ancho)
+        combo.setPlaceholderText("Escribí para buscar...")
+        return combo
 
     # ------------------------------------------------------------------
-    # Saldo DIDWW (esquina superior derecha): se refresca solo cada 30
-    # minutos, y también con el botón 🔄 (que fuerza una consulta ahora).
+    # Saldo DIDWW (esquina superior): se refresca solo cada 30 minutos, y
+    # también con el botón 🔄 (que fuerza una consulta ahora).
     # ------------------------------------------------------------------
     def actualizar_saldo(manual=False):
         if not api_key():
-            saldo_var.set("Saldo DIDWW: (falta API Key)")
-            saldo_estado_var.set("")
+            saldo_label.setText("Saldo DIDWW: (falta API Key)")
+            saldo_estado_label.setText("")
             return
 
         if manual:
-            btn_saldo_refresh.config(state="disabled")
-        lbl_saldo_estado.config(foreground=GRIS_ESTADO)
-        saldo_estado_var.set("Actualizando...")
+            btn_saldo_refresh.setEnabled(False)
+        saldo_estado_label.setStyleSheet(f"color: {GRIS_ESTADO};")
+        saldo_estado_label.setText("Actualizando...")
 
         def tarea():
             return store.get_balance(api_key())
 
         def on_done(resultado, error):
             if manual:
-                btn_saldo_refresh.config(state="normal")
+                btn_saldo_refresh.setEnabled(True)
             if error:
                 if isinstance(error, store.DidwwApiKeyError):
-                    saldo_var.set("Saldo DIDWW: ⚠️ API Key inválida")
+                    saldo_label.setText("Saldo DIDWW: ⚠️ API Key inválida")
                 else:
-                    saldo_var.set("Saldo DIDWW: error al consultar")
-                saldo_estado_var.set("")
+                    saldo_label.setText("Saldo DIDWW: error al consultar")
+                saldo_estado_label.setText("")
                 return
-            saldo_var.set(f"Saldo DIDWW: $ {resultado:,.2f}")
-            lbl_saldo_estado.config(foreground=VERDE_OK)
-            saldo_estado_var.set(f"✅ Actualizado a las {datetime.now().strftime('%H:%M')}")
+            saldo_label.setText(f"Saldo DIDWW: $ {resultado:,.2f}")
+            saldo_estado_label.setStyleSheet(f"color: {VERDE_OK};")
+            saldo_estado_label.setText(f"✅ Actualizado a las {datetime.now().strftime('%H:%M')}")
 
         run_bg(tarea, on_done)
 
@@ -341,61 +169,80 @@ def build(notebook, ctx):
         actualizar_saldo(manual=False)
         root.after(SALDO_REFRESH_MS, _auto_refresh_saldo)
 
-    btn_saldo_refresh.config(command=lambda: actualizar_saldo(manual=True))
+    btn_saldo_refresh.clicked.connect(lambda: actualizar_saldo(manual=True))
 
     # ------------------------------------------------------------------
     # Carga inicial (países / tipos DID) — igual en ambas sub-pestañas
     # ------------------------------------------------------------------
-    def cargar_iniciales(cmb_country, cmb_type, status_var):
+    def cargar_iniciales(cmb_country, cmb_type, status_label):
         if not api_key():
-            status_var.set("⚠️ Falta configurar la API Key de DIDWW (Proveedores → DIDWW → Configurar).")
+            status_label.setText("⚠️ Falta configurar la API Key de DIDWW (Proveedores → DIDWW → Configurar).")
             return
 
-        status_var.set("Cargando países y tipos de DID...")
+        status_label.setText("Cargando países y tipos de DID...")
 
         def tarea():
             return store.get_countries(api_key()), store.get_did_group_types(api_key())
 
         def on_done(resultado, error):
             if error:
-                status_var.set(f"⚠️ Error al cargar países/tipos: {error}")
+                status_label.setText(f"⚠️ Error al cargar países/tipos: {error}")
                 return
             countries, types = resultado
             set_combo_items(cmb_country, countries, nombre_attr)
             set_combo_items(cmb_type, types, nombre_attr)
-            status_var.set("")
+            status_label.setText("")
 
         run_bg(tarea, on_done)
 
     # ==================================================================
     # SUB-PESTAÑA: Número específico
     # ==================================================================
-    frm_wrapper, frm = ctx.seccion_plegable(tab_puntual, "🔎  Buscar números disponibles", "tienda_did.puntual_buscar")
-    frm_wrapper.pack(fill="x", padx=10, pady=(15, 10))
+    layout_puntual = QVBoxLayout(tab_puntual)
+    layout_puntual.setContentsMargins(0, 0, 0, 0)
 
-    ttk.Label(frm, text="País:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
-    cmb_p_country = ttk.Combobox(frm, state="readonly", width=28)
-    cmb_p_country.grid(row=0, column=1, padx=10, pady=5, sticky="w")
+    cmb_p_country = nueva_combo()
+    cmb_p_type = nueva_combo()
+    cmb_p_city = nueva_combo()
+    cmb_p_region = nueva_combo()
+    p_status_label = CaptionLabel("")
+    p_status_label.setStyleSheet(f"color: {GRIS_ESTADO};")
 
-    ttk.Label(frm, text="Tipo DID:", font=("Segoe UI", 10, "bold")).grid(row=0, column=2, sticky="w", pady=5, padx=(20, 0))
-    cmb_p_type = ttk.Combobox(frm, state="readonly", width=22)
-    cmb_p_type.grid(row=0, column=3, padx=10, pady=5, sticky="w")
+    btn_buscar_p = PrimaryPushButton(FluentIcon.SEARCH, "Buscar prefijos")
 
-    ttk.Label(frm, text="Ciudad:", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
-    cmb_p_city = ttk.Combobox(frm, state="readonly", width=28)
-    cmb_p_city.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+    # Grilla con línea divisoria entre "País/Tipo DID" y "Ciudad/Región", y
+    # el botón "Buscar prefijos" en su propia fila de abajo (alineado a la
+    # izquierda, bajo País/Ciudad) en vez de flotando altísimo al lado
+    # derecho de toda la grilla -reportado 2026-10-28, con una imagen
+    # marcando exactamente este acomodo (cuadros/líneas amarillas, cuadro
+    # rojo para el botón)-.
+    busqueda_p_grid = QGridLayout()
+    busqueda_p_grid.setHorizontalSpacing(12)
+    busqueda_p_grid.setVerticalSpacing(10)
+    busqueda_p_grid.addWidget(StrongBodyLabel("País:"), 0, 0)
+    busqueda_p_grid.addWidget(cmb_p_country, 0, 1)
+    busqueda_p_grid.addWidget(StrongBodyLabel("Tipo DID:"), 0, 2)
+    busqueda_p_grid.addWidget(cmb_p_type, 0, 3)
+    busqueda_p_grid.addWidget(linea_divisoria(), 1, 0, 1, 4)
+    busqueda_p_grid.addWidget(StrongBodyLabel("Ciudad:"), 2, 0)
+    busqueda_p_grid.addWidget(cmb_p_city, 2, 1)
+    busqueda_p_grid.addWidget(StrongBodyLabel("Región:"), 2, 2)
+    busqueda_p_grid.addWidget(cmb_p_region, 2, 3)
+    busqueda_p_grid.addWidget(linea_divisoria(), 3, 0, 1, 4)
+    busqueda_p_grid.addWidget(btn_buscar_p, 4, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+    busqueda_p_grid_widget = QWidget()
+    busqueda_p_grid_widget.setLayout(busqueda_p_grid)
 
-    ttk.Label(frm, text="Región:", font=("Segoe UI", 10, "bold")).grid(row=1, column=2, sticky="w", pady=5, padx=(20, 0))
-    cmb_p_region = ttk.Combobox(frm, state="readonly", width=22)
-    cmb_p_region.grid(row=1, column=3, padx=10, pady=5, sticky="w")
+    buscar_p_card = ctx.seccion_plegable(
+        FluentIcon.SEARCH, "Buscar números disponibles",
+        columna(busqueda_p_grid_widget, p_status_label),
+        "tienda_did.puntual_buscar",
+    )
+    layout_puntual.addWidget(buscar_p_card)
 
-    p_status_var = tk.StringVar()
-    ttk.Label(frm, textvariable=p_status_var, foreground="#9399b2", font=("Segoe UI", 9)).grid(
-        row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
-
-    def p_on_country_changed(event=None):
-        cmb_p_city.set("")
-        cmb_p_region.set("")
+    def p_on_country_changed(*_a):
+        cmb_p_city.setCurrentIndex(-1)
+        cmb_p_region.setCurrentIndex(-1)
         country_id = selected_id(cmb_p_country)
         if not country_id:
             return
@@ -405,7 +252,7 @@ def build(notebook, ctx):
 
         def on_done(resultado, error):
             if error:
-                p_status_var.set(f"⚠️ Error al cargar ciudades/regiones: {error}")
+                p_status_label.setText(f"⚠️ Error al cargar ciudades/regiones: {error}")
                 return
             cities, regions = resultado
             set_combo_items(cmb_p_city, cities, nombre_attr)
@@ -413,33 +260,30 @@ def build(notebook, ctx):
 
         run_bg(tarea, on_done)
 
-    def p_on_region_changed(event=None):
+    def p_on_region_changed(*_a):
         # Región y ciudad son mutuamente excluyentes, igual que el original.
         if selected_id(cmb_p_region):
-            cmb_p_city.set("")
-            cmb_p_city.configure(state="disabled")
+            cmb_p_city.setCurrentIndex(-1)
+            cmb_p_city.setEnabled(False)
         else:
-            cmb_p_city.configure(state="normal")
+            cmb_p_city.setEnabled(True)
 
-    cmb_p_country.bind("<<ComboboxSelected>>", p_on_country_changed)
-    cmb_p_region.bind("<<ComboboxSelected>>", p_on_region_changed)
+    cmb_p_country.currentIndexChanged.connect(p_on_country_changed)
+    cmb_p_region.currentIndexChanged.connect(p_on_region_changed)
 
-    lst_frame = ttk.Frame(tab_puntual)
-    lst_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-    lst_frame.columnconfigure(0, weight=1)
-    lst_frame.columnconfigure(1, weight=1)
-
-    ttk.Label(lst_frame, text="Prefijos encontrados:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
-    ttk.Label(lst_frame, text="Números disponibles:", font=("Segoe UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=(15, 0))
-
-    lst_groups = estilizar_listbox(tk.Listbox(lst_frame, height=10, exportselection=False))
-    lst_groups.grid(row=1, column=0, sticky="nsew", pady=5)
-    lst_numbers = estilizar_listbox(tk.Listbox(lst_frame, height=10, exportselection=False))
-    lst_numbers.grid(row=1, column=1, sticky="nsew", pady=5, padx=(15, 0))
-    lst_frame.rowconfigure(1, weight=1)
-
+    lst_groups = ListWidget()
+    lst_numbers = ListWidget()
     groups_data = []  # paralelo a lst_groups
     numbers_data = []  # paralelo a lst_numbers
+
+    listas_grid = QGridLayout()
+    listas_grid.addWidget(StrongBodyLabel("Prefijos encontrados:"), 0, 0)
+    listas_grid.addWidget(StrongBodyLabel("Números disponibles:"), 0, 1)
+    listas_grid.addWidget(lst_groups, 1, 0)
+    listas_grid.addWidget(lst_numbers, 1, 1)
+    listas_grid_widget = QWidget()
+    listas_grid_widget.setLayout(listas_grid)
+    layout_puntual.addWidget(listas_grid_widget, 1)
 
     def buscar_prefijos():
         if not api_key():
@@ -450,22 +294,22 @@ def build(notebook, ctx):
         if not country_id or not type_id:
             messagebox.showinfo("Faltan datos", "Selecciona País y Tipo DID.")
             return
-        city_id = selected_id(cmb_p_city) if str(cmb_p_city["state"]) != "disabled" else None
+        city_id = selected_id(cmb_p_city) if cmb_p_city.isEnabled() else None
         region_id = selected_id(cmb_p_region)
 
-        lst_groups.delete(0, tk.END)
-        lst_numbers.delete(0, tk.END)
+        lst_groups.clear()
+        lst_numbers.clear()
         groups_data.clear()
         numbers_data.clear()
-        btn_comprar_puntual.config(state="disabled")
-        p_status_var.set("Buscando prefijos...")
+        btn_comprar_puntual.setEnabled(False)
+        p_status_label.setText("Buscando prefijos...")
 
         def tarea():
             return store.get_did_groups(api_key(), country_id, city_id=city_id, region_id=region_id, type_id=type_id)
 
         def on_done(resultado, error):
             if error:
-                p_status_var.set("")
+                p_status_label.setText("")
                 messagebox.showerror("Error", f"Error en búsqueda de prefijos: {error}")
                 return
             groups_data.extend(resultado)
@@ -474,57 +318,57 @@ def build(notebook, ctx):
                 prefix = attrs.get("prefix") or ""
                 area = attrs.get("area_name") or ""
                 texto = f"📍 {prefix}" + (f" — {area}" if area else "")
-                lst_groups.insert(tk.END, texto)
-            p_status_var.set("" if resultado else "No hay prefijos disponibles para esos filtros.")
+                lst_groups.addItem(texto)
+            p_status_label.setText("" if resultado else "No hay prefijos disponibles para esos filtros.")
 
         run_bg(tarea, on_done)
 
-    def on_group_selected(event=None):
-        sel = lst_groups.curselection()
-        lst_numbers.delete(0, tk.END)
+    def on_group_selected():
+        idx = lst_groups.currentRow()
+        lst_numbers.clear()
         numbers_data.clear()
-        btn_comprar_puntual.config(state="disabled")
-        if not sel:
+        btn_comprar_puntual.setEnabled(False)
+        if idx < 0:
             return
-        group_id = groups_data[sel[0]]["id"]
-        p_status_var.set("Cargando numeraciones disponibles...")
+        group_id = groups_data[idx]["id"]
+        p_status_label.setText("Cargando numeraciones disponibles...")
 
         def tarea():
             return store.get_available_dids(api_key(), group_id)
 
         def on_done(resultado, error):
             if error:
-                p_status_var.set("")
+                p_status_label.setText("")
                 messagebox.showerror("Error", f"Error al cargar numeraciones: {error}")
                 return
             numbers_data.extend(resultado)
             for n in resultado:
                 numero = (n.get("attributes") or {}).get("number") or "(sin número)"
-                lst_numbers.insert(tk.END, numero)
-            p_status_var.set("" if resultado else "No hay numeraciones disponibles para ese prefijo.")
+                lst_numbers.addItem(numero)
+            p_status_label.setText("" if resultado else "No hay numeraciones disponibles para ese prefijo.")
 
         run_bg(tarea, on_done)
 
-    def on_number_selected(event=None):
-        btn_comprar_puntual.config(state="normal" if lst_numbers.curselection() else "disabled")
+    def on_number_selected():
+        btn_comprar_puntual.setEnabled(lst_numbers.currentRow() >= 0)
 
-    lst_groups.bind("<<ListboxSelect>>", on_group_selected)
-    lst_numbers.bind("<<ListboxSelect>>", on_number_selected)
+    lst_groups.currentRowChanged.connect(lambda _i: on_group_selected())
+    lst_numbers.currentRowChanged.connect(lambda _i: on_number_selected())
 
     def comprar_puntual():
-        sel_g = lst_groups.curselection()
-        sel_n = lst_numbers.curselection()
-        if not sel_g or not sel_n:
+        idx_g = lst_groups.currentRow()
+        idx_n = lst_numbers.currentRow()
+        if idx_g < 0 or idx_n < 0:
             return
-        group_id = groups_data[sel_g[0]]["id"]
-        did = numbers_data[sel_n[0]]
+        group_id = groups_data[idx_g]["id"]
+        did = numbers_data[idx_n]
         numero = (did.get("attributes") or {}).get("number") or did["id"]
 
         if not messagebox.askyesno("Confirmar compra", f"¿Comprar el número {numero}? Esta acción tiene costo real."):
             return
 
-        btn_comprar_puntual.config(state="disabled")
-        p_status_var.set(f"Comprando {numero}...")
+        btn_comprar_puntual.setEnabled(False)
+        p_status_label.setText(f"Comprando {numero}...")
 
         def tarea():
             sku_id = store.get_valid_sku_id(api_key(), group_id)
@@ -533,62 +377,80 @@ def build(notebook, ctx):
             return store.create_order(api_key(), did["id"], sku_id)
 
         def on_done(resultado, error):
-            p_status_var.set("")
+            p_status_label.setText("")
             if error:
                 messagebox.showerror("Error al comprar", str(error))
-                btn_comprar_puntual.config(state="normal")
+                btn_comprar_puntual.setEnabled(True)
                 return
             messagebox.showinfo("Compra realizada", f"✅ Se compró el número {numero} correctamente.")
-            lst_numbers.delete(0, tk.END)
+            lst_numbers.clear()
             numbers_data.clear()
 
         run_bg(tarea, on_done)
 
-    ttk.Button(frm, text="🔎  Buscar prefijos", command=buscar_prefijos, style="Accent.TButton").grid(
-        row=0, column=4, rowspan=2, padx=(30, 0))
-
-    btn_comprar_puntual = ttk.Button(frm, text="🛒  Comprar número seleccionado", command=comprar_puntual,
-                                      style="Accent.TButton", state="disabled")
-    btn_comprar_puntual.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+    btn_buscar_p.clicked.connect(buscar_prefijos)
+    btn_comprar_puntual = PrimaryPushButton(FluentIcon.SHOPPING_CART, "Comprar número seleccionado")
+    btn_comprar_puntual.setEnabled(False)
+    btn_comprar_puntual.clicked.connect(comprar_puntual)
+    fila_comprar_p = QHBoxLayout()
+    fila_comprar_p.addWidget(btn_comprar_puntual)
+    fila_comprar_p.addStretch(1)
+    layout_puntual.addLayout(fila_comprar_p)
 
     # ==================================================================
     # SUB-PESTAÑA: Aleatorio
     # ==================================================================
-    frm_r_wrapper, frm_r = ctx.seccion_plegable(tab_random, "🎲  Buscar prefijos para compra aleatoria", "tienda_did.random_buscar")
-    frm_r_wrapper.pack(fill="x", padx=10, pady=(15, 10))
+    layout_random = QVBoxLayout(tab_random)
+    layout_random.setContentsMargins(0, 0, 0, 0)
 
-    ttk.Label(frm_r, text="País:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
-    cmb_r_country = ttk.Combobox(frm_r, state="readonly", width=28)
-    cmb_r_country.grid(row=0, column=1, padx=10, pady=5, sticky="w")
+    cmb_r_country = nueva_combo()
+    cmb_r_type = nueva_combo()
+    cmb_r_city = nueva_combo()
+    cmb_r_region = nueva_combo()
+    cmb_r_qty = ComboBox()
+    cmb_r_qty.addItems(["1", "2", "5", "10", "20"])
+    cmb_r_qty.setCurrentIndex(0)
+    r_status_label = CaptionLabel("")
+    r_status_label.setStyleSheet(f"color: {GRIS_ESTADO};")
 
-    ttk.Label(frm_r, text="Tipo DID:", font=("Segoe UI", 10, "bold")).grid(row=0, column=2, sticky="w", pady=5, padx=(20, 0))
-    cmb_r_type = ttk.Combobox(frm_r, state="readonly", width=22)
-    cmb_r_type.grid(row=0, column=3, padx=10, pady=5, sticky="w")
+    btn_buscar_r = PrimaryPushButton(FluentIcon.SEARCH, "Buscar prefijos")
 
-    ttk.Label(frm_r, text="Ciudad:", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
-    cmb_r_city = ttk.Combobox(frm_r, state="readonly", width=28)
-    cmb_r_city.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+    # Mismo acomodo que busqueda_p_grid más arriba: línea divisoria entre
+    # cada fila y el botón abajo, alineado a la izquierda.
+    busqueda_r_grid = QGridLayout()
+    busqueda_r_grid.setHorizontalSpacing(12)
+    busqueda_r_grid.setVerticalSpacing(10)
+    busqueda_r_grid.addWidget(StrongBodyLabel("País:"), 0, 0)
+    busqueda_r_grid.addWidget(cmb_r_country, 0, 1)
+    busqueda_r_grid.addWidget(StrongBodyLabel("Tipo DID:"), 0, 2)
+    busqueda_r_grid.addWidget(cmb_r_type, 0, 3)
+    busqueda_r_grid.addWidget(linea_divisoria(), 1, 0, 1, 4)
+    busqueda_r_grid.addWidget(StrongBodyLabel("Ciudad:"), 2, 0)
+    busqueda_r_grid.addWidget(cmb_r_city, 2, 1)
+    busqueda_r_grid.addWidget(StrongBodyLabel("Región:"), 2, 2)
+    busqueda_r_grid.addWidget(cmb_r_region, 2, 3)
+    busqueda_r_grid.addWidget(linea_divisoria(), 3, 0, 1, 4)
+    busqueda_r_grid.addWidget(StrongBodyLabel("Cantidad:"), 4, 0)
+    busqueda_r_grid.addWidget(cmb_r_qty, 4, 1)
+    busqueda_r_grid.addWidget(linea_divisoria(), 5, 0, 1, 4)
+    busqueda_r_grid.addWidget(btn_buscar_r, 6, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+    busqueda_r_grid_widget = QWidget()
+    busqueda_r_grid_widget.setLayout(busqueda_r_grid)
 
-    ttk.Label(frm_r, text="Región:", font=("Segoe UI", 10, "bold")).grid(row=1, column=2, sticky="w", pady=5, padx=(20, 0))
-    cmb_r_region = ttk.Combobox(frm_r, state="readonly", width=22)
-    cmb_r_region.grid(row=1, column=3, padx=10, pady=5, sticky="w")
-
-    ttk.Label(frm_r, text="Cantidad:", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=5)
-    cmb_r_qty = ttk.Combobox(frm_r, state="readonly", width=10, values=["1", "2", "5", "10", "20"])
-    cmb_r_qty.current(0)
-    cmb_r_qty.grid(row=2, column=1, padx=10, pady=5, sticky="w")
-
-    r_status_var = tk.StringVar()
-    ttk.Label(frm_r, textvariable=r_status_var, foreground="#9399b2", font=("Segoe UI", 9)).grid(
-        row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
+    buscar_r_card = ctx.seccion_plegable(
+        FluentIcon.SEARCH, "Buscar prefijos para compra aleatoria",
+        columna(busqueda_r_grid_widget, r_status_label),
+        "tienda_did.random_buscar",
+    )
+    layout_random.addWidget(buscar_r_card)
 
     def _es_movil(combo_type):
         item = selected_item(combo_type)
         return bool(item) and "mobile" in nombre_attr(item).lower()
 
-    def r_on_country_changed(event=None):
-        cmb_r_city.set("")
-        cmb_r_region.set("")
+    def r_on_country_changed(*_a):
+        cmb_r_city.setCurrentIndex(-1)
+        cmb_r_region.setCurrentIndex(-1)
         country_id = selected_id(cmb_r_country)
         if not country_id:
             return
@@ -598,7 +460,7 @@ def build(notebook, ctx):
 
         def on_done(resultado, error):
             if error:
-                r_status_var.set(f"⚠️ Error al cargar ciudades/regiones: {error}")
+                r_status_label.setText(f"⚠️ Error al cargar ciudades/regiones: {error}")
                 return
             cities, regions = resultado
             set_combo_items(cmb_r_city, cities, nombre_attr)
@@ -606,21 +468,20 @@ def build(notebook, ctx):
 
         run_bg(tarea, on_done)
 
-    def r_on_region_changed(event=None):
+    def r_on_region_changed(*_a):
         if selected_id(cmb_r_region):
-            cmb_r_city.set("")
-            cmb_r_city.configure(state="disabled")
+            cmb_r_city.setCurrentIndex(-1)
+            cmb_r_city.setEnabled(False)
         else:
-            cmb_r_city.configure(state="normal")
+            cmb_r_city.setEnabled(True)
 
-    cmb_r_country.bind("<<ComboboxSelected>>", r_on_country_changed)
-    cmb_r_region.bind("<<ComboboxSelected>>", r_on_region_changed)
+    cmb_r_country.currentIndexChanged.connect(r_on_country_changed)
+    cmb_r_region.currentIndexChanged.connect(r_on_region_changed)
 
-    ttk.Label(tab_random, text="Prefijos encontrados:", font=("Segoe UI", 10, "bold")).pack(
-        anchor="w", padx=10)
-    lst_groups_r = estilizar_listbox(tk.Listbox(tab_random, height=10, exportselection=False))
-    lst_groups_r.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+    lst_groups_r = ListWidget()
     groups_data_r = []
+    layout_random.addWidget(StrongBodyLabel("Prefijos encontrados:"))
+    layout_random.addWidget(lst_groups_r, 1)
 
     def buscar_prefijos_random():
         if not api_key():
@@ -636,23 +497,23 @@ def build(notebook, ctx):
         city_id = None
         region_id = None
         if not es_movil:
-            city_id = selected_id(cmb_r_city) if str(cmb_r_city["state"]) != "disabled" else None
+            city_id = selected_id(cmb_r_city) if cmb_r_city.isEnabled() else None
             region_id = selected_id(cmb_r_region)
             if not city_id and not region_id:
                 messagebox.showinfo("Faltan datos", "Selecciona Ciudad o Región (o un Tipo DID móvil, que no las necesita).")
                 return
 
-        lst_groups_r.delete(0, tk.END)
+        lst_groups_r.clear()
         groups_data_r.clear()
-        btn_comprar_random.config(state="disabled")
-        r_status_var.set("Buscando prefijos...")
+        btn_comprar_random.setEnabled(False)
+        r_status_label.setText("Buscando prefijos...")
 
         def tarea():
             return store.get_did_groups(api_key(), country_id, city_id=city_id, region_id=region_id, type_id=type_id)
 
         def on_done(resultado, error):
             if error:
-                r_status_var.set("")
+                r_status_label.setText("")
                 messagebox.showerror("Error", f"Error en búsqueda de prefijos: {error}")
                 return
             groups_data_r.extend(resultado)
@@ -660,31 +521,31 @@ def build(notebook, ctx):
                 attrs = g.get("attributes") or {}
                 prefix = attrs.get("prefix") or ""
                 area = attrs.get("area_name") or ""
-                lst_groups_r.insert(tk.END, f"{prefix} — {area}" if area else prefix)
-            r_status_var.set("" if resultado else "No hay prefijos disponibles para esos filtros.")
+                lst_groups_r.addItem(f"{prefix} — {area}" if area else prefix)
+            r_status_label.setText("" if resultado else "No hay prefijos disponibles para esos filtros.")
 
         run_bg(tarea, on_done)
 
-    def on_group_r_selected(event=None):
-        btn_comprar_random.config(state="normal" if lst_groups_r.curselection() else "disabled")
+    def on_group_r_selected():
+        btn_comprar_random.setEnabled(lst_groups_r.currentRow() >= 0)
 
-    lst_groups_r.bind("<<ListboxSelect>>", on_group_r_selected)
+    lst_groups_r.currentRowChanged.connect(lambda _i: on_group_r_selected())
 
     def comprar_random():
-        sel = lst_groups_r.curselection()
-        if not sel:
+        idx = lst_groups_r.currentRow()
+        if idx < 0:
             return
-        group = groups_data_r[sel[0]]
-        texto = lst_groups_r.get(sel[0])
-        qty = int(cmb_r_qty.get() or "1")
+        group = groups_data_r[idx]
+        texto = lst_groups_r.item(idx).text()
+        qty = int(cmb_r_qty.currentText() or "1")
 
         if not messagebox.askyesno("Confirmar compra",
                                     f"¿Comprar {qty} número(s) aleatorio(s) del prefijo {texto}? "
                                     "Esta acción tiene costo real."):
             return
 
-        btn_comprar_random.config(state="disabled")
-        r_status_var.set("Comprando...")
+        btn_comprar_random.setEnabled(False)
+        r_status_label.setText("Comprando...")
 
         def tarea():
             sku_id = store.get_valid_sku_id(api_key(), group["id"])
@@ -693,36 +554,31 @@ def build(notebook, ctx):
             return store.create_order_random(api_key(), sku_id, qty)
 
         def on_done(resultado, error):
-            r_status_var.set("")
+            r_status_label.setText("")
             if error:
                 messagebox.showerror("Error al comprar", str(error))
-                btn_comprar_random.config(state="normal")
+                btn_comprar_random.setEnabled(True)
                 return
             messagebox.showinfo("Compra realizada", f"✅ Se compraron {qty} número(s) correctamente.")
 
         run_bg(tarea, on_done)
 
-    ttk.Button(frm_r, text="🔎  Buscar prefijos", command=buscar_prefijos_random, style="Accent.TButton").grid(
-        row=0, column=4, rowspan=2, padx=(30, 0))
-
-    btn_comprar_random = ttk.Button(frm_r, text="🛒  Comprar aleatorio", command=comprar_random,
-                                     style="Accent.TButton", state="disabled")
-    btn_comprar_random.grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
-
-    # ------------------------------------------------------------------
-    # País/Tipo/Ciudad/Región: se puede escribir para filtrar (más fácil
-    # de encontrar la opción que con listas largas de países/ciudades).
-    # La cantidad (cmb_r_qty) se deja como estaba: son solo 5 opciones.
-    # ------------------------------------------------------------------
-    for _combo in (cmb_p_country, cmb_p_type, cmb_p_city, cmb_p_region,
-                   cmb_r_country, cmb_r_type, cmb_r_city, cmb_r_region):
-        hacer_combobox_buscable(_combo)
+    btn_buscar_r.clicked.connect(buscar_prefijos_random)
+    btn_comprar_random = PrimaryPushButton(FluentIcon.SHOPPING_CART, "Comprar aleatorio")
+    btn_comprar_random.setEnabled(False)
+    btn_comprar_random.clicked.connect(comprar_random)
+    fila_comprar_r = QHBoxLayout()
+    fila_comprar_r.addWidget(btn_comprar_random)
+    fila_comprar_r.addStretch(1)
+    layout_random.addLayout(fila_comprar_r)
 
     # ------------------------------------------------------------------
     # Carga inicial de ambas sub-pestañas (países / tipos DID)
     # ------------------------------------------------------------------
-    cargar_iniciales(cmb_p_country, cmb_p_type, p_status_var)
-    cargar_iniciales(cmb_r_country, cmb_r_type, r_status_var)
+    cargar_iniciales(cmb_p_country, cmb_p_type, p_status_label)
+    cargar_iniciales(cmb_r_country, cmb_r_type, r_status_label)
 
     actualizar_saldo(manual=False)
     root.after(SALDO_REFRESH_MS, _auto_refresh_saldo)
+
+    return page

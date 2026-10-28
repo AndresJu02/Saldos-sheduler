@@ -2,92 +2,47 @@
 cálculo y actualización de Chrome/ChromeDriver.
 
 Siempre se agrega de última en gui/app.py, para que quede como la
-pestaña más a la derecha del notebook."""
+pestaña más a la derecha del selector."""
 import threading
-import webbrowser
-import tkinter as tk
-from tkinter import ttk, filedialog
+
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFileDialog
+from qfluentwidgets import LineEdit, PrimaryPushButton, PushButton, BodyLabel, FluentIcon
 
 from core.chrome_tools import get_installed_versions, update_chrome_stack
 from gui import dialogs as messagebox
-from gui.dialogs import boton_ayuda
+from gui.dialogs import boton_ayuda, mostrar_ayuda_larga
+from gui.widgets import fila_campo, texto_informativo, columna, pagina_con_scroll
 
 
-def build(notebook, ctx):
+def build(ctx):
     root = ctx.root
     BG = ctx.BG
     config = ctx.config
     save_config = ctx.save_config
 
-    tab_config = ttk.Frame(notebook)
-    notebook.add(tab_config, text="   Configuración   ")
-
-    # La pestaña tiene varias secciones y no todas caben sin agrandar la
-    # ventana, así que se muestra dentro de un canvas con scrollbar
-    # vertical (mismo patrón que Cargas VOIP y Proveedores).
-    config_canvas = tk.Canvas(tab_config, bg=BG, highlightthickness=0)
-    config_vscroll = ttk.Scrollbar(tab_config, orient="vertical", command=config_canvas.yview)
-    config_content = ttk.Frame(config_canvas)
-    config_content_window = config_canvas.create_window((0, 0), window=config_content, anchor="nw")
-    config_content.bind("<Configure>", lambda e: config_canvas.configure(scrollregion=config_canvas.bbox("all")))
-    config_canvas.bind("<Configure>", lambda e: config_canvas.itemconfigure(config_content_window, width=e.width))
-    config_canvas.configure(yscrollcommand=config_vscroll.set)
-    config_canvas.pack(side="left", fill="both", expand=True)
-    config_vscroll.pack(side="right", fill="y")
-
-    def _config_on_mousewheel(event):
-        config_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-    def _config_bind_mousewheel(_event=None):
-        config_canvas.bind_all("<MouseWheel>", _config_on_mousewheel)
-
-    def _config_unbind_mousewheel(_event=None):
-        config_canvas.unbind_all("<MouseWheel>")
-
-    # OJO: activar/desactivar esto con <Enter>/<Leave> DEL CANVAS (como se
-    # hizo al principio) casi no funciona, porque esos eventos solo llegan
-    # cuando el mouse está sobre el fondo vacío del canvas -los widgets de
-    # adentro (Entry, Label, botones...) son ventanas propias dentro del
-    # canvas y absorben el Enter/Leave, así que nunca se detecta que el
-    # mouse "entró" si está sobre un campo o una sección, que es casi toda
-    # el área visible-. En cambio, se activa/desactiva según qué pestaña
-    # del Notebook está seleccionada: así la rueda funciona sobre
-    # cualquier punto de la pestaña Configuración, esté lo que esté debajo
-    # del cursor (reportado 2026-10-27).
-    def _config_on_tab_changed(_event=None):
-        if notebook.select() == str(tab_config):
-            _config_bind_mousewheel()
-        else:
-            _config_unbind_mousewheel()
-
-    notebook.bind("<<NotebookTabChanged>>", _config_on_tab_changed, add="+")
+    page, layout = pagina_con_scroll(BG)
 
     # ---------------- Conexión Bitrix24 (compartida) ----------------
     # Cargas VOIP, Tickets, Renovación DIDWW y Notificaciones usan este
     # mismo Webhook y User ID -antes cada pestaña tenía su propio campo,
     # pero todas terminaban apuntando a la misma cuenta de Bitrix24-. Se
     # configura una sola vez aquí.
-    bitrix_wrapper, bitrix_frame = ctx.seccion_plegable(config_content, "🔌  Conexión Bitrix24", "configuracion.bitrix")
-    bitrix_wrapper.pack(fill="x", padx=10, pady=(15, 10))
-
-    bitrix_webhook_var = tk.StringVar(value=config.get("bitrix_webhook_url", ""))
-    bitrix_user_id_var = tk.StringVar(value=str(config.get("mi_user_id", "13")))
+    bitrix_webhook_edit = LineEdit()
+    bitrix_webhook_edit.setText(config.get("bitrix_webhook_url", ""))
+    bitrix_user_id_edit = LineEdit()
+    bitrix_user_id_edit.setText(str(config.get("mi_user_id", "13")))
 
     def guardar_bitrix_webhook():
-        config["bitrix_webhook_url"] = bitrix_webhook_var.get().strip()
-        config["mi_user_id"] = bitrix_user_id_var.get().strip() or "13"
+        config["bitrix_webhook_url"] = bitrix_webhook_edit.text().strip()
+        config["mi_user_id"] = bitrix_user_id_edit.text().strip() or "13"
         save_config(config)
         messagebox.showinfo("Guardado", "Conexión de Bitrix24 actualizada.")
 
     def ayuda_webhook_bitrix():
-        win = tk.Toplevel(root)
-        win.title("Cómo obtener el Webhook URL de Bitrix24")
-        win.geometry("600x480")
-        win.configure(bg=BG)
-        texto = (
+        mostrar_ayuda_larga(
+            "Cómo obtener el Webhook URL de Bitrix24",
             "1. Entra a tu portal de Bitrix24 (ej: tuempresa.bitrix24.es).\n"
-            "2. En el menú lateral, ve a 'Más' → 'Mercado' (o busca 'Webhooks' con la "
-            "lupa de arriba).\n"
+            "2. En el menú lateral, ve a 'Más' → 'Mercado' (o busca 'Webhooks' con la lupa de arriba).\n"
             "3. Entra a 'Desarrollador' → 'Otro' → 'Webhooks'.\n"
             "4. Pestaña 'Entrante' → botón 'Agregar webhook entrante'.\n\n"
             "PERMISOS:\n"
@@ -103,56 +58,42 @@ def build(notebook, ctx):
             "'dueño' del webhook -las acciones automáticas (like a tickets, respuestas en "
             "el chat, etc.) quedan registradas como hechas por ese usuario-."
         )
-        lbl = ttk.Label(win, text=texto, justify="left", wraplength=560)
-        lbl.pack(padx=15, pady=15)
-        ttk.Button(win, text="Cerrar", command=win.destroy).pack(pady=10)
 
-    row_bitrix = ttk.Frame(bitrix_frame)
-    row_bitrix.pack(fill="x")
-    ttk.Label(row_bitrix, text="Webhook URL:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
-    ttk.Entry(row_bitrix, textvariable=bitrix_webhook_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
-    ttk.Button(row_bitrix, text="❓  ¿De dónde lo saco?", command=ayuda_webhook_bitrix).pack(side="left", padx=3)
+    btn_ayuda_webhook = PushButton("¿De dónde lo saco?")
+    btn_ayuda_webhook.clicked.connect(ayuda_webhook_bitrix)
+    btn_guardar_bitrix = PrimaryPushButton(FluentIcon.SAVE, "Guardar")
+    btn_guardar_bitrix.clicked.connect(guardar_bitrix_webhook)
 
-    row_bitrix_user = ttk.Frame(bitrix_frame)
-    row_bitrix_user.pack(fill="x", pady=(10, 0))
-    boton_ayuda(
-        row_bitrix_user,
-        "Lo usan Tickets (para no darle like a sus propias asignaciones) y 🔔 Notificaciones "
-        "(para no notificarte tus propios mensajes). Es el ID numérico del usuario de Bitrix24 "
-        "dueño del Webhook -el mismo número que aparece después de /rest/ en la URL de arriba-.",
-        titulo="Mi User ID",
-    ).pack(side="left", padx=(0, 6))
-    ttk.Label(row_bitrix_user, text="Mi User ID:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
-    ttk.Entry(row_bitrix_user, textvariable=bitrix_user_id_var, width=10).pack(side="left", padx=(0, 10))
-    ttk.Button(row_bitrix_user, text="💾  Guardar", command=guardar_bitrix_webhook, style="Accent.TButton").pack(side="left", padx=3)
+    bitrix_content = columna(
+        fila_campo("Webhook URL:", bitrix_webhook_edit, extra=btn_ayuda_webhook),
+        fila_campo(
+            "Mi User ID:", bitrix_user_id_edit, extra=btn_guardar_bitrix,
+            ayuda=boton_ayuda(
+                "Lo usan Tickets (para no darle like a sus propias asignaciones) y 🔔 Notificaciones "
+                "(para no notificarte tus propios mensajes). Es el ID numérico del usuario de Bitrix24 "
+                "dueño del Webhook -el mismo número que aparece después de /rest/ en la URL de arriba-.",
+                titulo="Mi User ID",
+            ),
+        ),
+        texto_informativo("Lo usan: Cargas VOIP, Tickets, Renovación DIDWW y 🔔 Notificaciones."),
+    )
+    bitrix_card = ctx.seccion_plegable(FluentIcon.LINK, "Conexión Bitrix24", bitrix_content, "configuracion.bitrix")
+    layout.addWidget(bitrix_card)
 
-    ttk.Label(
-        bitrix_frame,
-        text="Lo usan: Cargas VOIP, Tickets, Renovación DIDWW y 🔔 Notificaciones.",
-        foreground="#9399b2", font=("Segoe UI", 9)
-    ).pack(anchor="w", pady=(10, 0))
-
-    cred_wrapper, cred_frame = ctx.seccion_plegable(config_content, "🔑  Archivo de credenciales", "configuracion.credenciales")
-    cred_wrapper.pack(fill="x", padx=10, pady=(0, 10))
-
-    cred_path_var = tk.StringVar(value=config.get("credentials_path", ""))
+    # ---------------- Archivo de credenciales ----------------
+    cred_path_edit = LineEdit()
+    cred_path_edit.setText(config.get("credentials_path", ""))
 
     def seleccionar_credenciales():
-        path = filedialog.askopenfilename(
-            title="Seleccionar credenciales.json",
-            filetypes=[("JSON", "*.json"), ("Todos", "*.*")]
-        )
+        path, _ = QFileDialog.getOpenFileName(root, "Seleccionar credenciales.json", "", "JSON (*.json);;Todos (*.*)")
         if path:
-            cred_path_var.set(path)
+            cred_path_edit.setText(path)
             config["credentials_path"] = path
             save_config(config)
 
     def ayuda_credenciales():
-        win = tk.Toplevel(root)
-        win.title("Cómo obtener credenciales.json")
-        win.geometry("550x500")
-        win.configure(bg=BG)
-        texto = (
+        mostrar_ayuda_larga(
+            "Cómo obtener credenciales.json",
             "1. Ve a: https://console.cloud.google.com/\n"
             "2. Inicia sesión con tu cuenta de Google.\n"
             "3. Arriba a la izquierda, haz clic en 'Seleccionar proyecto' → 'Nuevo proyecto'.\n"
@@ -169,19 +110,27 @@ def build(notebook, ctx):
             "12. Haz clic sobre la cuenta de servicio creada.\n"
             "13. Ve a la pestaña 'Claves' → 'Agregar clave' → 'Crear clave nueva' → 'JSON'.\n"
             "14. Se descargará un archivo .json. Renómbralo a 'credenciales.json'.\n\n"
-            "Luego, en esta aplicación, selecciona ese archivo con el botón 'Examinar'."
+            "Luego, en esta aplicación, selecciona ese archivo con el botón 'Examinar'.",
+            enlace="https://console.cloud.google.com/",
+            texto_enlace="Abrir Google Cloud Console",
         )
-        lbl = ttk.Label(win, text=texto, justify="left", wraplength=500)
-        lbl.pack(padx=15, pady=15)
-        ttk.Button(win, text="Abrir Google Cloud Console", command=lambda: webbrowser.open("https://console.cloud.google.com/")).pack(pady=5)
-        ttk.Button(win, text="Cerrar", command=win.destroy).pack(pady=10)
 
-    row_cred = ttk.Frame(cred_frame)
-    row_cred.pack(fill="x")
-    ttk.Label(row_cred, text="Ruta:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
-    ttk.Entry(row_cred, textvariable=cred_path_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
-    ttk.Button(row_cred, text="Examinar", command=seleccionar_credenciales, style="Accent.TButton").pack(side="left", padx=3)
-    ttk.Button(row_cred, text="Ayuda", command=ayuda_credenciales).pack(side="left", padx=3)
+    btn_examinar_cred = PrimaryPushButton(FluentIcon.FOLDER, "Examinar")
+    btn_examinar_cred.clicked.connect(seleccionar_credenciales)
+    btn_ayuda_cred = PushButton("Ayuda")
+    btn_ayuda_cred.clicked.connect(ayuda_credenciales)
+
+    fila_cred_botones = QHBoxLayout()
+    fila_cred_botones.addWidget(btn_examinar_cred)
+    fila_cred_botones.addWidget(btn_ayuda_cred)
+    fila_cred_botones_widget = QWidget()
+    fila_cred_botones_widget.setLayout(fila_cred_botones)
+
+    cred_content = columna(
+        fila_campo("Ruta:", cred_path_edit, extra=fila_cred_botones_widget),
+    )
+    cred_card = ctx.seccion_plegable(FluentIcon.CERTIFICATE, "Archivo de credenciales", cred_content, "configuracion.credenciales")
+    layout.addWidget(cred_card)
 
     # ---------------- API Key DIDWW ----------------
     # La MISMA clave que usan Proveedores -> DIDWW -> Configurar, Renovación
@@ -190,67 +139,62 @@ def build(notebook, ctx):
     # como config es el mismo dict compartido en memoria, un cambio hecho
     # desde el diálogo de Proveedores ya queda guardado ahí; lo único que
     # hace falta es refrescar esta entrada cuando se vuelve a esta pestaña
-    # (por si se cambió en Proveedores mientras tanto), con el bind de
-    # <<NotebookTabChanged>> más abajo.
-    didww_wrapper, didww_frame = ctx.seccion_plegable(config_content, "🔐  API Key de DIDWW", "configuracion.didww_key")
-    didww_wrapper.pack(fill="x", padx=10, pady=(0, 10))
-
-    didww_key_var = tk.StringVar(value=config.get("providers_config", {}).get("DIDWW", {}).get("api_key", ""))
+    # (por si se cambió en Proveedores mientras tanto) -ver page.on_activated
+    # al final de esta función-.
+    didww_key_edit = LineEdit()
+    didww_key_edit.setText(config.get("providers_config", {}).get("DIDWW", {}).get("api_key", ""))
 
     def guardar_didww_key():
-        valor = didww_key_var.get().strip()
+        valor = didww_key_edit.text().strip()
         config.setdefault("providers_config", {}).setdefault("DIDWW", {})["api_key"] = valor
         save_config(config)
         messagebox.showinfo("Guardado", "API Key de DIDWW actualizada.")
 
     def refrescar_didww_key():
-        didww_key_var.set(config.get("providers_config", {}).get("DIDWW", {}).get("api_key", ""))
+        didww_key_edit.setText(config.get("providers_config", {}).get("DIDWW", {}).get("api_key", ""))
 
-    row_didww = ttk.Frame(didww_frame)
-    row_didww.pack(fill="x")
-    boton_ayuda(
-        row_didww,
-        "Se comparte con Proveedores → DIDWW → Configurar, Renovación DIDWW y Tienda DID: cambiarla "
-        "aquí la actualiza en todos lados, y cambiarla desde Proveedores también se ve reflejado aquí.",
-        titulo="API Key de DIDWW",
-    ).pack(side="left", padx=(0, 6))
-    ttk.Label(row_didww, text="API Key:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
-    ttk.Entry(row_didww, textvariable=didww_key_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
-    ttk.Button(row_didww, text="Guardar", command=guardar_didww_key, style="Accent.TButton").pack(side="left", padx=3)
+    btn_guardar_didww = PrimaryPushButton(FluentIcon.SAVE, "Guardar")
+    btn_guardar_didww.clicked.connect(guardar_didww_key)
 
-    notebook.bind(
-        "<<NotebookTabChanged>>",
-        lambda e: refrescar_didww_key() if notebook.select() == str(tab_config) else None,
-        add="+"
+    didww_content = columna(
+        fila_campo(
+            "API Key:", didww_key_edit, extra=btn_guardar_didww,
+            ayuda=boton_ayuda(
+                "Se comparte con Proveedores → DIDWW → Configurar, Renovación DIDWW y Tienda DID: cambiarla "
+                "aquí la actualiza en todos lados, y cambiarla desde Proveedores también se ve reflejado aquí.",
+                titulo="API Key de DIDWW",
+            ),
+        ),
     )
+    didww_card = ctx.seccion_plegable(FluentIcon.VPN, "API Key de DIDWW", didww_content, "configuracion.didww_key")
+    layout.addWidget(didww_card)
 
-    url_wrapper, url_frame = ctx.seccion_plegable(config_content, "🌐  URL de Google Sheets", "configuracion.google_sheets")
-    url_wrapper.pack(fill="x", padx=10, pady=(0, 10))
-
-    sheet_url_var = tk.StringVar(value=config.get("google_sheet_url", ""))
+    # ---------------- URL de Google Sheets ----------------
+    sheet_url_edit = LineEdit()
+    sheet_url_edit.setText(config.get("google_sheet_url", ""))
 
     def guardar_url():
-        config["google_sheet_url"] = sheet_url_var.get().strip()
+        config["google_sheet_url"] = sheet_url_edit.text().strip()
         save_config(config)
         messagebox.showinfo("Guardado", "URL de Google Sheets actualizada.")
 
-    row_url = ttk.Frame(url_frame)
-    row_url.pack(fill="x")
-    ttk.Label(row_url, text="URL:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 8))
-    ttk.Entry(row_url, textvariable=sheet_url_var).pack(side="left", expand=True, fill="x", padx=(0, 10))
-    ttk.Button(row_url, text="Guardar URL", command=guardar_url, style="Accent.TButton").pack(side="left", padx=3)
+    btn_guardar_url = PrimaryPushButton(FluentIcon.SAVE, "Guardar URL")
+    btn_guardar_url.clicked.connect(guardar_url)
+
+    url_content = columna(
+        fila_campo("URL:", sheet_url_edit, extra=btn_guardar_url),
+    )
+    url_card = ctx.seccion_plegable(FluentIcon.GLOBE, "URL de Google Sheets", url_content, "configuracion.google_sheets")
+    layout.addWidget(url_card)
 
     # ---------------- ChromeDriver / Chrome ----------------
-    driver_wrapper, driver_frame = ctx.seccion_plegable(config_content, "🧭  Chrome / ChromeDriver", "configuracion.chrome_driver")
-    driver_wrapper.pack(fill="x", padx=10, pady=(0, 10))
-
     def _version_label_text():
         v_chrome, v_driver = get_installed_versions()
         v_chrome = v_chrome or "no instalado"
         v_driver = v_driver or "no instalado"
         return f"Chrome: {v_chrome}      ChromeDriver: {v_driver}"
 
-    driver_version_var = tk.StringVar(value=_version_label_text())
+    driver_version_label = BodyLabel(_version_label_text())
 
     def actualizar_chromedriver():
         respuesta = messagebox.askyesno(
@@ -261,31 +205,36 @@ def build(notebook, ctx):
         if not respuesta:
             return
 
-        btn_actualizar_driver.config(state="disabled", text="Actualizando...")
-        driver_version_var.set("Consultando última versión disponible...")
+        btn_actualizar_driver.setEnabled(False)
+        btn_actualizar_driver.setText("Actualizando...")
+        driver_version_label.setText("Consultando última versión disponible...")
 
         def tarea():
             try:
                 version, _, _ = update_chrome_stack()
                 root.after(0, lambda: (
-                    driver_version_var.set(_version_label_text()),
+                    driver_version_label.setText(_version_label_text()),
                     messagebox.showinfo("Actualizado", f"Chrome y ChromeDriver actualizados a la versión {version}.")
                 ))
             except Exception as e:
                 root.after(0, lambda: (
-                    driver_version_var.set(_version_label_text()),
+                    driver_version_label.setText(_version_label_text()),
                     messagebox.showerror("Error", f"No se pudo actualizar ChromeDriver:\n{e}")
                 ))
             finally:
-                root.after(0, lambda: btn_actualizar_driver.config(state="normal", text="Actualizar a la última versión"))
+                root.after(0, lambda: (btn_actualizar_driver.setEnabled(True), btn_actualizar_driver.setText("Actualizar a la última versión")))
 
         threading.Thread(target=tarea, daemon=True).start()
 
-    row_driver = ttk.Frame(driver_frame)
-    row_driver.pack(fill="x")
-    ttk.Label(row_driver, textvariable=driver_version_var).pack(side="left", padx=(0, 10))
-    btn_actualizar_driver = ttk.Button(
-        row_driver, text="Actualizar a la última versión",
-        command=actualizar_chromedriver, style="Accent.TButton"
+    btn_actualizar_driver = PrimaryPushButton(FluentIcon.SYNC, "Actualizar a la última versión")
+    btn_actualizar_driver.clicked.connect(actualizar_chromedriver)
+
+    driver_content = columna(
+        fila_campo("", driver_version_label, extra=btn_actualizar_driver),
     )
-    btn_actualizar_driver.pack(side="right", padx=3)
+    driver_card = ctx.seccion_plegable(FluentIcon.DEVELOPER_TOOLS, "Chrome / ChromeDriver", driver_content, "configuracion.chrome_driver")
+    layout.addWidget(driver_card)
+
+    layout.addStretch(1)
+    page.on_activated = refrescar_didww_key  # ver gui/app.py: _add_tab llama esto al mostrar la pestaña
+    return page

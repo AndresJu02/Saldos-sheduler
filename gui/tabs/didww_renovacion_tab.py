@@ -3,24 +3,23 @@ renueva automáticamente líneas DIDWW cuando alguien las pide "Renovar"
 en el chat de Bitrix24. La lógica del monitor vive en
 didww_renovacion.py (raíz del proyecto), no aquí — este archivo solo
 construye la pestaña."""
-import tkinter as tk
-from tkinter import ttk
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
+from qfluentwidgets import LineEdit, PrimaryPushButton, PushButton, BodyLabel, FluentIcon, HeaderCardWidget
 
 from gui.process_control import ManagedProcess
 from gui import dialogs as messagebox
 from gui.dialogs import boton_ayuda, checkbox_modo_prueba
+from gui.qt_compat import LabelVar
 from gui.log_viewer import crear_visor_log
+from gui.widgets import fila_campo, texto_informativo, columna
 
 
-def build(notebook, ctx):
+def build(ctx):
     root = ctx.root
     ACCENT = ctx.ACCENT
     config = ctx.config
     save_config = ctx.save_config
     base_dir = ctx.base_dir
-
-    tab_didww = ttk.Frame(notebook)
-    notebook.add(tab_didww, text="   Renovación DIDWW   ")
 
     try:
         import didww_renovacion
@@ -28,78 +27,83 @@ def build(notebook, ctx):
     except Exception:
         dw_cfg = config.get("didww_renovacion_config", {})
 
-    conexion_wrapper, conexion_frame = ctx.seccion_plegable(tab_didww, "🔌  Conexión Bitrix24", "didww.conexion")
-    conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
+    page = QWidget()
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(15, 15, 15, 15)
+    layout.setSpacing(10)
 
-    ttk.Label(
-        conexion_frame,
-        text="ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración.",
-        foreground="#9399b2", font=("Segoe UI", 9)
-    ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
+    dw_chat_edit = LineEdit()
+    dw_chat_edit.setPlaceholderText("ej. chat142")
+    dw_chat_edit.setText(dw_cfg.get("chat_id", ""))
 
-    fila_chat_dw = ttk.Frame(conexion_frame)
-    fila_chat_dw.grid(row=1, column=0, sticky="w", pady=5)
-    boton_ayuda(
-        fila_chat_dw,
-        "La API Key de DIDWW no se configura aquí: se reutiliza la misma que ya está guardada "
-        "en la pestaña Proveedores → DIDWW → Configurar.",
-        titulo="API Key de DIDWW",
-    ).pack(side="left", padx=(0, 6))
-    ttk.Label(fila_chat_dw, text="Chat de renovaciones (ID):", font=("Segoe UI", 10, "bold")).pack(side="left")
-    dw_chat_var = tk.StringVar(value=dw_cfg.get("chat_id", ""))
-    ttk.Entry(conexion_frame, textvariable=dw_chat_var, width=20).grid(row=1, column=1, padx=15, pady=5, sticky="w")
+    dw_poll_edit = LineEdit()
+    dw_poll_edit.setText(str(dw_cfg.get("poll_interval", 30)))
 
-    ttk.Label(conexion_frame, text="Intervalo de sondeo (s):", font=("Segoe UI", 10, "bold")).grid(row=1, column=2, sticky="w", pady=5, padx=(20, 0))
-    dw_poll_var = tk.StringVar(value=str(dw_cfg.get("poll_interval", 30)))
-    ttk.Entry(conexion_frame, textvariable=dw_poll_var, width=10).grid(row=1, column=3, padx=15, pady=5, sticky="w")
-    conexion_frame.columnconfigure(1, weight=1)
-
-    dw_dry_run_var = tk.BooleanVar(value=bool(dw_cfg.get("dry_run", True)))
-    fila_dry_run_dw = ttk.Frame(conexion_frame)
-    fila_dry_run_dw.grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 0))
-    checkbox_modo_prueba(fila_dry_run_dw, dw_dry_run_var).pack(side="left")
-    boton_ayuda(
-        fila_dry_run_dw,
-        "Detecta y registra qué haría en el log, sin modificar nada en DIDWW y SIN escribir nada en el "
-        "chat de Bitrix24.",
-        titulo="Modo de prueba (dry-run)",
-    ).pack(side="left", padx=(6, 0))
-
-
+    dw_dry_run_chk = checkbox_modo_prueba(bool(dw_cfg.get("dry_run", True)))
 
     def guardar_didww():
         try:
-            poll_interval = int(dw_poll_var.get())
+            poll_interval = int(dw_poll_edit.text())
         except ValueError:
             messagebox.showerror("Error", "El intervalo de sondeo debe ser un número entero de segundos.")
             return
-        if not dw_chat_var.get().strip():
+        if not dw_chat_edit.text().strip():
             messagebox.showerror("Error", "Indica el ID del chat de renovaciones de Bitrix24.")
             return
 
         config["didww_renovacion_config"] = {
-            "chat_id": dw_chat_var.get().strip(),
+            "chat_id": dw_chat_edit.text().strip(),
             "poll_interval": poll_interval,
-            "dry_run": bool(dw_dry_run_var.get()),
+            "dry_run": bool(dw_dry_run_chk.isChecked()),
         }
         save_config(config)
         messagebox.showinfo("Guardado", "Configuración de Renovación DIDWW actualizada.")
 
-    ttk.Button(conexion_frame, text="💾  Guardar configuración", command=guardar_didww, style="Accent.TButton").grid(
-        row=4, column=3, pady=(15, 0), sticky="e"
+    btn_guardar = PrimaryPushButton(FluentIcon.SAVE, "Guardar configuración")
+    btn_guardar.clicked.connect(guardar_didww)
+    fila_guardar = QHBoxLayout()
+    fila_guardar.addStretch(1)
+    fila_guardar.addWidget(btn_guardar)
+    fila_guardar_widget = QWidget()
+    fila_guardar_widget.setLayout(fila_guardar)
+
+    conexion_content = columna(
+        texto_informativo("ℹ  El Webhook de Bitrix24 ahora se configura una sola vez en la pestaña Configuración."),
+        fila_campo(
+            "Chat de renovaciones (ID):", dw_chat_edit,
+            ayuda=boton_ayuda(
+                "La API Key de DIDWW no se configura aquí: se reutiliza la misma que ya está guardada "
+                "en la pestaña Proveedores → DIDWW → Configurar.",
+                titulo="API Key de DIDWW",
+            ),
+        ),
+        fila_campo("Intervalo de sondeo (s):", dw_poll_edit),
+        fila_campo(
+            "", dw_dry_run_chk,
+            ayuda=boton_ayuda(
+                "Detecta y registra qué haría en el log, sin modificar nada en DIDWW y SIN escribir nada en el "
+                "chat de Bitrix24.",
+                titulo="Modo de prueba (dry-run)",
+            ),
+        ),
+        fila_guardar_widget,
     )
+    conexion_card = ctx.seccion_plegable(FluentIcon.LINK, "Conexión Bitrix24", conexion_content, "didww.conexion")
+    layout.addWidget(conexion_card)
 
     # ---------------- Control del monitor ----------------
-    dw_control_frame = ttk.LabelFrame(tab_didww, text="▶  Monitor", padding=15)
-    dw_control_frame.pack(fill="x", padx=10, pady=(0, 10))
+    control_card = HeaderCardWidget("▶  Monitor")
 
-    didww_renov_status_var = tk.StringVar()
+    didww_renov_status_label = BodyLabel()
+    didww_renov_status_label.setStyleSheet(f"color: {ACCENT}; font-weight: bold;")
+    didww_renov_status_var = LabelVar(didww_renov_status_label)
+
     monitor = ctx.register_process(ManagedProcess(
         root=root,
         launch_cmd=lambda: ctx.get_launch_cmd(['--didww-renovacion']),
     )).bind(didww_renov_status_var, on_change=lambda running: (
-        btn_dw_iniciar.config(state=tk.DISABLED if running else tk.NORMAL),
-        btn_dw_detener.config(state=tk.NORMAL if running else tk.DISABLED),
+        btn_dw_iniciar.setEnabled(not running),
+        btn_dw_detener.setEnabled(running),
     ))
 
     def dw_iniciar():
@@ -126,15 +130,28 @@ def build(notebook, ctx):
         monitor.stop()
         messagebox.showinfo("Renovación DIDWW", "Monitor detenido.")
 
-    dw_btn_row = ttk.Frame(dw_control_frame)
-    dw_btn_row.pack(fill="x")
+    btn_dw_iniciar = PrimaryPushButton(FluentIcon.PLAY, "Iniciar Monitor")
+    btn_dw_iniciar.clicked.connect(dw_iniciar)
 
-    btn_dw_iniciar = ttk.Button(dw_btn_row, text="▶  Iniciar Monitor", command=dw_iniciar, style="Accent.TButton")
-    btn_dw_iniciar.pack(side="left", padx=3)
+    btn_dw_detener = PushButton(FluentIcon.PAUSE, "Detener Monitor")
+    btn_dw_detener.setEnabled(False)
+    btn_dw_detener.clicked.connect(dw_detener)
 
-    btn_dw_detener = ttk.Button(dw_btn_row, text="⏹  Detener Monitor", command=dw_detener, state="disabled")
-    btn_dw_detener.pack(side="left", padx=3)
+    btn_ver_log = crear_visor_log(base_dir / "didww_renovacion.log", root)
 
-    ttk.Label(dw_btn_row, textvariable=didww_renov_status_var, foreground=ACCENT, font=("Segoe UI", 10, "bold")).pack(side="left", padx=15)
+    fila_botones = QHBoxLayout()
+    fila_botones.addWidget(btn_dw_iniciar)
+    fila_botones.addWidget(btn_dw_detener)
+    fila_botones.addSpacing(10)
+    fila_botones.addWidget(didww_renov_status_label)
+    fila_botones.addStretch(1)
+    fila_botones.addWidget(btn_ver_log)
+    fila_botones_widget = QWidget()
+    fila_botones_widget.setLayout(fila_botones)
 
-    crear_visor_log(dw_btn_row, dw_control_frame, base_dir / "didww_renovacion.log", root).pack(side="right", padx=3)
+    monitor_content = columna(fila_botones_widget, btn_ver_log.panel, margins=(24, 16, 24, 20))
+    control_card.viewLayout.addWidget(monitor_content)
+    layout.addWidget(control_card)
+
+    layout.addStretch(1)
+    return page

@@ -21,13 +21,16 @@ from gui.collapsible import crear_seccion_plegable
 
 @dataclass
 class AppContext:
-    root: "tkinter.Tk"
+    root: "gui.qt_compat.AfterCapableWindow"  # la QMainWindow principal (ver gui/app.py)
     base_dir: Path
     config: dict
     save_config: Callable[[dict], None]
     get_launch_cmd: Callable[[list], list]
 
-    # Colores del tema oscuro (ver gui/theme.py)
+    # Colores del tema oscuro (ver gui/theme.py). La mayoría de los
+    # widgets ya se autotemean vía QFluentWidgets (setTheme/setThemeColor);
+    # estos colores en bruto son para los pocos casos que necesitan un
+    # valor exacto (textos de estado en verde/rojo, etc.).
     BG: str
     FG: str
     ACCENT: str
@@ -35,6 +38,10 @@ class AppContext:
     DARKER: str
     ENTRY_BG: str
     BUTTON_BG: str
+    PANEL: str
+    VERDE: str
+    ROJO: str
+    AMARILLO: str
 
     # Procesos en segundo plano registrados por las pestañas (Scheduler,
     # Cargas VOIP, Tickets, ...). gui/app.py los detiene todos al cerrar
@@ -54,7 +61,7 @@ class AppContext:
     def register_autostart(self, fn: Callable[[], None]) -> None:
         self.autostart_callbacks.append(fn)
 
-    def seccion_plegable(self, parent, titulo: str, key: str, abierta_por_defecto: bool = True):
+    def seccion_plegable(self, icon, titulo: str, content_widget, key: str, abierta_por_defecto: bool = True):
         """Como crear_seccion_plegable(), pero recuerda si el usuario la dejó
         plegada o desplegada entre una sesión y otra (persistido en
         scheduler_config.json bajo "ui_collapsed_sections"). `key` debe ser
@@ -66,4 +73,4 @@ class AppContext:
             estados[key] = abierta_nueva
             self.save_config(self.config)
 
-        return crear_seccion_plegable(parent, titulo, abierta_por_defecto=abierta, on_toggle=_on_toggle)
+        return crear_seccion_plegable(icon, titulo, content_widget, abierta_por_defecto=abierta, on_toggle=_on_toggle)

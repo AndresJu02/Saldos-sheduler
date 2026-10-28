@@ -1,20 +1,27 @@
 """
-Ventana principal: tema, notebook y barra inferior (control del
-Scheduler de saldos). Cada pestaña del notebook vive en su propio
-archivo bajo gui/tabs/ — este módulo solo las ensambla.
+Ventana principal: tema, pestañas (SegmentedWidget + QStackedWidget) y
+barra inferior (control del Scheduler de saldos). Cada pestaña vive en su
+propio archivo bajo gui/tabs/ — este módulo solo las ensambla.
 
 Para agregar una pestaña nueva:
-  1. Crear gui/tabs/mi_modulo.py con una función build(notebook, ctx).
-  2. Importarla aquí y agregar una línea `mi_modulo.build(notebook, ctx)`
+  1. Crear gui/tabs/mi_modulo.py con una función build(ctx) -> QWidget
+     que arme y devuelva la página completa (ver cualquier pestaña
+     existente para el patrón completo: tarjetas plegables con
+     ctx.seccion_plegable(), sección "Monitor" fija, etc.).
+  2. Importarla aquí y agregar una línea `_add_tab("Mi pestaña", mi_modulo.build, ctx)`
      junto a las demás, en el orden en que quieras que aparezca.
   3. Configuración siempre debe agregarse de última (queda a la derecha).
 """
 import sys
-import tkinter as tk
-from tkinter import ttk
-from pathlib import Path
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QFrame
+from qfluentwidgets import SegmentedWidget, PrimaryPushButton, PushButton, BodyLabel, FluentIcon
 
 from gui import dialogs as messagebox
+from gui.qt_compat import AfterCapableWindow, LabelVar
+from gui.widgets import pintar_boton_peligro
 
 from remote_lock import verificar_bloqueo
 from core.config import load_config, save_config
@@ -28,28 +35,34 @@ from gui.process_control import ManagedProcess
 from gui.tabs import proveedores, cargas_voip_tab, tickets_tab, didww_renovacion_tab, tienda_did_tab, notificaciones_tab, configuracion
 
 
+class MainWindow(AfterCapableWindow, QMainWindow):
+    """QMainWindow + .after()/.after_cancel() (ver gui/qt_compat.py), para
+    que ManagedProcess, el visor de log y el polling de cada pestaña
+    sigan funcionando igual que con el root.after() de Tkinter."""
+    pass
+
+
 def run_gui():
-    root = tk.Tk()
-    root.title("Saldos Scheduler")
-    # Ancho pensado para que quepan las 7 pestañas sin que ttk les recorte
-    # el texto -con 835px (el ancho original, de antes de agregar la
-    # pestaña de Notificaciones) ya no alcanzaba-.
-    root.geometry("950x600")
-    root.minsize(950, 500)
-    root.configure(bg="#1e1e2e")
+    app = QApplication(sys.argv)
+    colors = apply_dark_theme()
 
-    # Centrar ventana
-    root.update_idletasks()
-    w = root.winfo_width()
-    h = root.winfo_height()
-    sw = root.winfo_screenwidth()
-    sh = root.winfo_screenheight()
-    x = (sw - w) // 2
-    y = (sh - h) // 2
-    root.geometry(f"+{x}+{y}")
+    root = MainWindow()
+    root._init_after_bridge()  # ver gui/qt_compat.py: hace falta ANTES de que cualquier hilo de fondo use root.after()
+    root.setWindowTitle("LEYLA")
+    try:
+        root.setWindowIcon(QIcon(str(BASE_DIR / "icono.ico")))
+    except Exception:
+        pass
+    # Ancho pensado para que quepan las 7 pestañas sin que se amontonen.
+    root.resize(1000, 650)
+    root.setMinimumSize(980, 560)
 
-    apply_dark_titlebar(root)
-    colors = apply_dark_theme(root)
+    central = QWidget()
+    central.setStyleSheet(f"background-color: {colors['BG']};")
+    root.setCentralWidget(central)
+    main_layout = QVBoxLayout(central)
+    main_layout.setContentsMargins(0, 0, 0, 0)
+    main_layout.setSpacing(0)
 
     config = load_config()
 
@@ -64,18 +77,14 @@ def run_gui():
 
     def verificar_y_avisar():
         if verificar_bloqueo():
-            overlay = tk.Frame(root, bg="white")
-            overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
-            overlay.lift()
-            root.update_idletasks()
             messagebox.showwarning(
                 "Aplicación bloqueada",
                 "⚠️  Esta aplicación ha sido bloqueada por el administrador.\n\n"
                 "Contacte al soporte para más información."
             )
-            # Se cierre el diálogo con "Aceptar", con Escape o con la X: en
-            # cualquier caso la app queda bloqueada, así que se cierra
-            # por completo en vez de dejar la ventana (ahora tapada) abierta.
+            # Se cierre el diálogo con "Aceptar" o con la X: en cualquier
+            # caso la app queda bloqueada, así que se cierra por completo
+            # en vez de dejar la ventana abierta.
             on_closing()
             sys.exit(0)
         else:
@@ -90,43 +99,95 @@ def run_gui():
                     pass
     root.after(150, verificar_y_avisar)
 
-    # ====================== NOTEBOOK ======================
-    # Se crea (y se le agregan las pestañas) antes de mostrarlo, pero el
-    # .pack() se deja para el final -después de empacar la barra inferior-
-    # porque el orden de los .pack() es lo que decide qué se encoge primero
-    # si la ventana se hace más chica: lo empacado primero (bottom, con
-    # tamaño fijo) se respeta, y lo empacado después (notebook, expand=True)
-    # es lo que cede espacio. Empacar el notebook antes hacía que los
-    # botones de Iniciar/Detener/Ejecutar/Salir desaparecieran al achicar
-    # la ventana.
-    notebook = ttk.Notebook(root)
+    # ====================== PESTAÑAS ======================
+    # SegmentedWidget (QFluentWidgets) ya dibuja la barra de pestañas como
+    # un "segmented control" tipo macOS, con esquinas redondeadas de
+    # verdad -lo que en la versión ttk/customtkinter no se podía lograr
+    # del todo-. Cada módulo de pestaña expone build(ctx) -> QWidget (la
+    # página completa); acá solo se agregan al stack y al selector.
+    #
+    # Dos SegmentedWidget separados (no uno solo): "pivot" para las
+    # pestañas de trabajo y "pivot_utilidad" para 🔔/⚙, empujado del todo a
+    # la derecha con un stretch en el medio -un solo SegmentedWidget no
+    # permite meterle un hueco en el medio a sus propios ítems-.
+    pivot = SegmentedWidget()
+    pivot_utilidad = SegmentedWidget()
+    stack = QStackedWidget()
+    activadores = {}  # nombre -> _activar, para poder forzar la pestaña inicial más abajo
 
-    proveedores.build(notebook, ctx)
-    cargas_voip_tab.build(notebook, ctx)
-    tickets_tab.build(notebook, ctx)
-    didww_renovacion_tab.build(notebook, ctx)
-    tienda_did_tab.build(notebook, ctx)
-    notificaciones_tab.build(notebook, ctx)
-    configuracion.build(notebook, ctx)  # siempre de última: queda más a la derecha
+    def _add_tab(pivot_obj, nombre, build_fn, icon=None, texto=None):
+        page = build_fn(ctx)
+        page.setObjectName(nombre)
+        stack.addWidget(page)
+
+        # OJO: SegmentedWidget conecta onClick a una señal Qt que manda un
+        # bool (itemClicked = pyqtSignal(bool), ver qfluentwidgets). Si esta
+        # función tuviera "page" como parámetro (aunque sea con default,
+        # ej. "def _activar(page=page)"), Qt la toma como el destino de ese
+        # bool y lo pisa -"page" terminaba valiendo True/False en vez del
+        # QWidget, reportado 2026-10-28 (TypeError: argument 1 has
+        # unexpected type 'bool')-. "page" se sigue capturando por closure
+        # sin problema (cada llamada a _add_tab tiene su propio "page"); acá
+        # solo hace falta un parámetro que absorba ese bool y no se use.
+        def _activar(_checked=False):
+            stack.setCurrentWidget(page)
+            pivot_obj.setCurrentItem(nombre)
+            # Algunas pestañas (ej. Configuración, que refresca la API Key
+            # de DIDWW por si se cambió desde Proveedores) necesitan saber
+            # cuándo el usuario vuelve a verlas -ver gui/tabs/configuracion.py-.
+            activar = getattr(page, "on_activated", None)
+            if activar is not None:
+                activar()
+
+        pivot_obj.addItem(routeKey=nombre, text=nombre if texto is None else texto, icon=icon, onClick=_activar)
+        activadores[nombre] = _activar
+
+    _add_tab(pivot, "Proveedores", proveedores.build)
+    _add_tab(pivot, "Cargas VOIP", cargas_voip_tab.build)
+    _add_tab(pivot, "Tickets", tickets_tab.build)
+    _add_tab(pivot, "Renovación DIDWW", didww_renovacion_tab.build)
+    _add_tab(pivot, "Tienda DID", tienda_did_tab.build)
+    _add_tab(pivot_utilidad, "🔔", notificaciones_tab.build)
+    # Emoji de engranaje como texto (igual que "🔔" arriba) -no usar
+    # icon=FluentIcon.SETTING: ese parámetro activa el padding asimétrico
+    # "hasIcon=true" de PushButton (36px a la izquierda vs 12px a la
+    # derecha), lo que deja el recuadro de selección descentrado respecto
+    # al ícono y el botón más ancho de lo necesario (reportado 2026-10-28).
+    _add_tab(pivot_utilidad, "Configuración", configuracion.build, texto="⚙")
+    stack.setCurrentIndex(0)  # valor inicial sensato mientras carga; lo confirma _activar() de abajo
+
+    tabbar_row = QHBoxLayout()
+    tabbar_row.setContentsMargins(15, 5, 15, 5)
+    tabbar_row.addWidget(pivot)
+    tabbar_row.addStretch(1)
+    tabbar_row.addWidget(pivot_utilidad)
+    main_layout.addLayout(tabbar_row)
+    main_layout.addWidget(stack, 1)
 
     # ====================== BARRA INFERIOR (Scheduler de saldos) ======================
-    bottom = ttk.Frame(root)
-    bottom.pack(side="bottom", fill="x", padx=15, pady=(5, 15))
+    bottom = QFrame()
+    bottom.setStyleSheet(f"background-color: {colors['DARKER']}; border-radius: 14px;")
+    bottom_layout = QHBoxLayout(bottom)
+    bottom_layout.setContentsMargins(15, 10, 15, 10)
 
-    scheduler_status_var = tk.StringVar()
+    scheduler_status_label = BodyLabel()
+    scheduler_status_label.setStyleSheet(f"color: {colors['ACCENT']}; font-weight: bold;")
+    scheduler_status_var = LabelVar(scheduler_status_label)
+
     scheduler = ctx.register_process(ManagedProcess(
         root=root,
         launch_cmd=lambda: ctx.get_launch_cmd(['--scheduler']),
         running_text="🟢  En ejecución (esperando horarios)",
     )).bind(scheduler_status_var, on_change=lambda running: (
-        btn_iniciar.config(state=tk.DISABLED if running else tk.NORMAL),
-        btn_detener.config(state=tk.NORMAL if running else tk.DISABLED),
+        btn_iniciar.setEnabled(not running),
+        btn_detener.setEnabled(running),
     ))
 
     def iniciar_scheduler():
         if scheduler.running:
             messagebox.showinfo("Scheduler", "El scheduler ya está en ejecución.")
             return
+        from pathlib import Path
         if not Path(config.get("credentials_path", "")).exists():
             messagebox.showerror("Error", "Archivo de credenciales no encontrado.")
             return
@@ -139,6 +200,7 @@ def run_gui():
         messagebox.showinfo("Scheduler", "Scheduler detenido.")
 
     def ejecutar_ahora():
+        from pathlib import Path
         if not Path(config.get("credentials_path", "")).exists():
             messagebox.showerror("Error", "Archivo de credenciales no encontrado.")
             return
@@ -158,30 +220,64 @@ def run_gui():
     def on_closing():
         for proceso in ctx.processes:
             proceso.stop()
-        root.destroy()
+        root.close()
 
-    root.protocol("WM_DELETE_WINDOW", on_closing)
+    btn_iniciar = PrimaryPushButton(FluentIcon.PLAY, "Iniciar Scheduler")
+    btn_iniciar.clicked.connect(iniciar_scheduler)
+    bottom_layout.addWidget(btn_iniciar)
 
-    control_frame = ttk.Frame(bottom)
-    control_frame.pack(side="left")
+    btn_detener = PushButton(FluentIcon.PAUSE, "Detener Scheduler")
+    btn_detener.setEnabled(False)
+    btn_detener.clicked.connect(detener_scheduler)
+    bottom_layout.addWidget(btn_detener)
 
-    btn_iniciar = ttk.Button(control_frame, text="▶  Iniciar Scheduler", command=iniciar_scheduler, style="Accent.TButton")
-    btn_iniciar.pack(side="left", padx=3)
+    bottom_layout.addSpacing(10)
+    bottom_layout.addWidget(scheduler_status_label)
 
-    btn_detener = ttk.Button(control_frame, text="⏹  Detener Scheduler", command=detener_scheduler, state="disabled")
-    btn_detener.pack(side="left", padx=3)
+    # "Ejecutar Ahora" y la versión van pegados al estado del scheduler (no
+    # al otro extremo de la barra, separados por un hueco enorme) -el
+    # stretch se corrió para después de ellos, así "Salir" sigue quedando
+    # solo, pegado del todo a la derecha (reportado 2026-10-28, con cuadros
+    # de colores marcando exactamente dónde debía quedar cada uno).
+    bottom_layout.addSpacing(16)
+    # QFluentWidgets no trae un ícono de rayo -se probaron todos los nombres
+    # parecidos (POWER_BUTTON, SPEED_HIGH, etc), ninguno es un rayo de
+    # verdad-, así que en vez de un ícono se usa el emoji "⚡" como parte
+    # del texto del botón (2026-10-28).
+    btn_ejecutar = PrimaryPushButton("⚡  Ejecutar Ahora")
+    btn_ejecutar.clicked.connect(ejecutar_ahora)
+    bottom_layout.addWidget(btn_ejecutar)
 
-    scheduler_status_label = ttk.Label(
-        control_frame, textvariable=scheduler_status_var,
-        foreground=ctx.ACCENT, font=("Segoe UI", 10, "bold")
-    )
-    scheduler_status_label.pack(side="left", padx=15)
+    bottom_layout.addSpacing(28)
+    version_label = BodyLabel(f"v{VERSION} ·by Andres")
+    version_label.setStyleSheet("color: #6c6c70;")
+    bottom_layout.addWidget(version_label)
 
-    ttk.Button(bottom, text="⚡  Ejecutar Ahora", command=ejecutar_ahora, style="Accent.TButton").pack(side="left", padx=5)
-    ttk.Button(bottom, text="Salir", command=on_closing).pack(side="right", padx=5)
+    bottom_layout.addStretch(1)
 
-    ttk.Label(bottom, text=f"v{VERSION} ·by Andres", foreground="#6c7086", font=("Segoe UI", 8)).pack(side="right", padx=10)
+    btn_salir = PushButton("Salir")
+    # pintar_boton_peligro (no un setStyleSheet("QPushButton{...}") suelto)
+    # -ese selector genérico le ganaba al "PushButton" propio de
+    # QFluentWidgets y le hacía perder el fondo/borde redondeado por
+    # completo, dejando solo el texto rojo flotando sin botón alrededor
+    # (reportado 2026-10-28, marcado con un recuadro verde).
+    pintar_boton_peligro(btn_salir)
+    btn_salir.clicked.connect(on_closing)
+    bottom_layout.addWidget(btn_salir)
 
-    notebook.pack(fill="both", expand=True, padx=15, pady=(15, 5))
+    main_layout.addWidget(bottom)
 
-    root.mainloop()
+    root.show()
+    apply_dark_titlebar(root)  # después de show(): recién ahí winId() es el HWND real y visible
+
+    # Fuerza la pestaña inicial DESPUÉS de mostrar la ventana (y por el
+    # mismo camino que un clic real -activadores[...]-, no solo
+    # stack.setCurrentIndex): con la ventana recién armada, antes de
+    # mostrarse, se vieron casos donde el SegmentedWidget terminaba
+    # mostrando otra pestaña como seleccionada (reportado 2026-10-28,
+    # inconsistente entre arranques) -probablemente por geometría/eventos
+    # de layout todavía no resueltos en ese momento-. Haciéndolo acá, ya
+    # con la ventana visible, queda determinístico.
+    root.after(0, lambda: activadores["Proveedores"]())
+
+    sys.exit(app.exec())

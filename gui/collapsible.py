@@ -1,78 +1,49 @@
-"""Secciones plegables: mismo look que un ttk.LabelFrame (borde + título
-en color de acento), pero con un encabezado cliqueable que despliega/
-contrae el contenido -para no tener que scrollear entre secciones que no
-se están usando en el momento-.
+"""
+Secciones plegables: una tarjeta (QFluentWidgets ExpandGroupSettingCard)
+con esquinas redondeadas de verdad, encabezado con ícono + título, y una
+flechita que despliega/contrae el contenido -para no tener que scrollear
+entre secciones que no se están usando en el momento-.
 
-Uso (reemplaza la construcción de un LabelFrame normal):
+Uso típico en una pestaña:
 
-    conexion_wrapper, conexion_frame = crear_seccion_plegable(cv_content, "🔌  Conexión Bitrix24")
-    conexion_wrapper.pack(fill="x", padx=10, pady=(15, 10))
-
-De ahí en más, `conexion_frame` se usa exactamente igual que el LabelFrame
-de antes (.grid(), .columnconfigure(), etc. con los mismos hijos) -es un
-ttk.Frame con el mismo padding=15-. Lo único que cambia es que ahora hay
-que empacar `conexion_wrapper` (no `conexion_frame`) en el padre.
+    contenido = QWidget()
+    layout = QGridLayout(contenido)
+    layout.addWidget(QLabel("Chat ID:"), 0, 0)
+    ...
+    card = ctx.seccion_plegable(FluentIcon.LINK, "Chat de Bitrix24", contenido, "cargas_voip.conexion")
+    layout_de_la_pestaña.addWidget(card)
 
 Las secciones "▶  Monitor" quedan A PROPÓSITO fuera de esto -el pedido
 explícito fue que esas NO se puedan plegar-: siguen siendo un
-ttk.LabelFrame común y corriente en cada pestaña.
+HeaderCardWidget o CardWidget común y corriente en cada pestaña.
+
+NOTA 2026-10-28: se intentó redondear más el borde de estas tarjetas (el
+que trae la librería por defecto es un outline de 6px, apenas visible) de
+tres formas distintas -QSS con border-radius solo, QSS con
+background-color + WA_StyledBackground, y envolviendo todo en un QFrame
+con setMask()-. Las dos primeras no tuvieron ningún efecto visible, y la
+de setMask() rompió la animación de expandir/contraer (la sección quedaba
+colapsada sola y aparecía un recuadro suelto en otra parte de la
+pantalla). Se descartaron las tres -esta función quedó como estaba
+originalmente- para no dejar ese bug; si se retoma, probar por el lado de
+parchear ExpandBorderWidget en vez de pelear con QSS o con setMask().
 """
-import tkinter as tk
-from tkinter import ttk
-
-BG = "#1e1e2e"
-ACCENT = "#89b4fa"
-BORDE = "#585b70"
-HOVER = "#313244"
+from qfluentwidgets import ExpandGroupSettingCard
 
 
-def crear_seccion_plegable(parent, titulo, abierta_por_defecto=True, on_toggle=None):
-    estado = {"abierta": abierta_por_defecto}
+def crear_seccion_plegable(icon, titulo, content_widget, abierta_por_defecto=True, on_toggle=None):
+    card = ExpandGroupSettingCard(icon, titulo)
+    card.addGroupWidget(content_widget)
 
-    wrapper = ttk.Frame(parent)
+    if on_toggle is not None:
+        # toggleExpand() (conectado a expandButton.clicked en __init__ de
+        # ExpandSettingCard) ya corrió y actualizó card.isExpand antes de
+        # que se dispare este segundo listener -las conexiones a la misma
+        # señal corren en el orden en que se conectaron-, así que leerlo
+        # acá adentro ya da el estado NUEVO.
+        card.card.expandButton.clicked.connect(lambda: on_toggle(card.isExpand))
 
-    header = tk.Frame(wrapper, bg=BG, cursor="hand2")
-    header.pack(fill="x")
+    if abierta_por_defecto:
+        card.setExpand(True)
 
-    flecha_var = tk.StringVar()
-    lbl_flecha = tk.Label(header, textvariable=flecha_var, bg=BG, fg=ACCENT,
-                           font=("Segoe UI", 10, "bold"), cursor="hand2")
-    lbl_flecha.pack(side="left", padx=(4, 6), pady=(3, 5))
-    lbl_titulo = tk.Label(header, text=titulo, bg=BG, fg=ACCENT,
-                           font=("Segoe UI", 11, "bold"), cursor="hand2")
-    lbl_titulo.pack(side="left", pady=(3, 5))
-
-    caja = tk.Frame(wrapper, bg=BG, highlightthickness=1, highlightbackground=BORDE)
-    contenido = ttk.Frame(caja, padding=15)
-    contenido.pack(fill="both", expand=True)
-
-    widgets_clicables = (header, lbl_flecha, lbl_titulo)
-
-    def _refrescar():
-        flecha_var.set("▾" if estado["abierta"] else "▸")
-        if estado["abierta"]:
-            caja.pack(fill="both", expand=True)
-        else:
-            caja.pack_forget()
-
-    def _alternar(_evt=None):
-        estado["abierta"] = not estado["abierta"]
-        _refrescar()
-        if on_toggle:
-            on_toggle(estado["abierta"])
-
-    def _hover_on(_evt=None):
-        for w in widgets_clicables:
-            w.configure(bg=HOVER)
-
-    def _hover_off(_evt=None):
-        for w in widgets_clicables:
-            w.configure(bg=BG)
-
-    for w in widgets_clicables:
-        w.bind("<Button-1>", _alternar)
-        w.bind("<Enter>", _hover_on)
-        w.bind("<Leave>", _hover_off)
-
-    _refrescar()
-    return wrapper, contenido
+    return card

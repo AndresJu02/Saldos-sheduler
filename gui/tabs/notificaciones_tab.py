@@ -2,24 +2,23 @@
 escritorio para Canales Abiertos (chats nuevos / mensajes nuevos). La
 lógica del monitor vive en notificaciones_bitrix.py (raíz del proyecto),
 no aquí — este archivo solo construye la pestaña."""
-import tkinter as tk
-from tkinter import ttk
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
+from qfluentwidgets import LineEdit, PrimaryPushButton, PushButton, BodyLabel, TitleLabel, FluentIcon, HeaderCardWidget
 
 from gui.process_control import ManagedProcess
 from gui import dialogs as messagebox
 from gui.dialogs import boton_ayuda
+from gui.qt_compat import LabelVar
 from gui.log_viewer import crear_visor_log
+from gui.widgets import fila_campo, texto_informativo, columna
 
 
-def build(notebook, ctx):
+def build(ctx):
     root = ctx.root
     ACCENT = ctx.ACCENT
     config = ctx.config
     save_config = ctx.save_config
     base_dir = ctx.base_dir
-
-    tab_notif = ttk.Frame(notebook)
-    notebook.add(tab_notif, text=" 🔔 ")
 
     try:
         import notificaciones_bitrix
@@ -27,44 +26,25 @@ def build(notebook, ctx):
     except Exception:
         nf_cfg = config.get("notificaciones_config", {})
 
-    ttk.Label(tab_notif, text="🔔  Notificaciones de Canales Abiertos", font=("Segoe UI", 12, "bold")).pack(
-        anchor="w", padx=10, pady=(15, 0)
-    )
+    page = QWidget()
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(15, 15, 15, 15)
+    layout.setSpacing(10)
 
-    nf_conexion_wrapper, nf_conexion_frame = ctx.seccion_plegable(tab_notif, "🔌  Conexión Bitrix24", "notificaciones.conexion")
-    nf_conexion_wrapper.pack(fill="x", padx=10, pady=(10, 10))
+    titulo = TitleLabel("🔔  Notificaciones de Canales Abiertos")
+    layout.addWidget(titulo)
 
-    ttk.Label(
-        nf_conexion_frame,
-        text="ℹ  El Webhook y el User ID de Bitrix24 se configuran una sola vez en la pestaña Configuración.",
-        foreground="#9399b2", font=("Segoe UI", 9)
-    ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 5))
-    nf_conexion_frame.columnconfigure(1, weight=1)
-
-    fila_poll = ttk.Frame(nf_conexion_frame)
-    fila_poll.grid(row=2, column=0, sticky="w", pady=5)
-    boton_ayuda(
-        fila_poll,
-        "Revisa periódicamente los chats de \"Canales abiertos\" de Bitrix24 y muestra una "
-        "notificación de Windows (como las de WhatsApp) cuando aparece un chat nuevo o llega "
-        "un mensaje nuevo. No se notifican los mensajes que tú mismo envíes (según 'Mi User ID', "
-        "pestaña Configuración).",
-        titulo="Notificaciones de Canales abiertos",
-    ).pack(side="left", padx=(0, 6))
-    ttk.Label(fila_poll, text="Intervalo de sondeo (s):", font=("Segoe UI", 10, "bold")).pack(side="left")
-    nf_poll_var = tk.StringVar(value=str(nf_cfg.get("poll_interval", 15)))
-    ttk.Entry(nf_conexion_frame, textvariable=nf_poll_var, width=10).grid(row=2, column=1, padx=15, pady=5, sticky="w")
+    nf_poll_edit = LineEdit()
+    nf_poll_edit.setText(str(nf_cfg.get("poll_interval", 15)))
 
     def guardar_notificaciones():
         try:
-            poll_interval = int(nf_poll_var.get())
+            poll_interval = int(nf_poll_edit.text())
         except ValueError:
             messagebox.showerror("Error", "El intervalo de sondeo debe ser un número entero de segundos.")
             return
 
-        config["notificaciones_config"] = {
-            "poll_interval": poll_interval,
-        }
+        config["notificaciones_config"] = {"poll_interval": poll_interval}
         save_config(config)
         messagebox.showinfo("Guardado", "Configuración de Notificaciones actualizada.")
 
@@ -81,22 +61,48 @@ def build(notebook, ctx):
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo mostrar la notificación de prueba:\n{e}")
 
-    botones_frame = ttk.Frame(nf_conexion_frame)
-    botones_frame.grid(row=4, column=0, columnspan=4, pady=(15, 0), sticky="e")
-    ttk.Button(botones_frame, text="🔔  Probar notificación", command=probar_notificacion).pack(side="right", padx=(8, 0))
-    ttk.Button(botones_frame, text="💾  Guardar configuración", command=guardar_notificaciones, style="Accent.TButton").pack(side="right")
+    btn_probar = PushButton(FluentIcon.RINGER, "Probar notificación")
+    btn_probar.clicked.connect(probar_notificacion)
+    btn_guardar = PrimaryPushButton(FluentIcon.SAVE, "Guardar configuración")
+    btn_guardar.clicked.connect(guardar_notificaciones)
+
+    fila_botones_guardar = QHBoxLayout()
+    fila_botones_guardar.addStretch(1)
+    fila_botones_guardar.addWidget(btn_probar)
+    fila_botones_guardar.addWidget(btn_guardar)
+    fila_botones_guardar_widget = QWidget()
+    fila_botones_guardar_widget.setLayout(fila_botones_guardar)
+
+    conexion_content = columna(
+        texto_informativo("ℹ  El Webhook y el User ID de Bitrix24 se configuran una sola vez en la pestaña Configuración."),
+        fila_campo(
+            "Intervalo de sondeo (s):", nf_poll_edit,
+            ayuda=boton_ayuda(
+                "Revisa periódicamente los chats de \"Canales abiertos\" de Bitrix24 y muestra una "
+                "notificación de Windows (como las de WhatsApp) cuando aparece un chat nuevo o llega "
+                "un mensaje nuevo. No se notifican los mensajes que tú mismo envíes (según 'Mi User ID', "
+                "pestaña Configuración).",
+                titulo="Notificaciones de Canales abiertos",
+            ),
+        ),
+        fila_botones_guardar_widget,
+    )
+    conexion_card = ctx.seccion_plegable(FluentIcon.LINK, "Conexión Bitrix24", conexion_content, "notificaciones.conexion")
+    layout.addWidget(conexion_card)
 
     # ---------------- Control del monitor ----------------
-    nf_control_frame = ttk.LabelFrame(tab_notif, text="▶  Monitor", padding=15)
-    nf_control_frame.pack(fill="x", padx=10, pady=(0, 10))
+    control_card = HeaderCardWidget("▶  Monitor")
 
-    notif_status_var = tk.StringVar()
+    notif_status_label = BodyLabel()
+    notif_status_label.setStyleSheet(f"color: {ACCENT}; font-weight: bold;")
+    notif_status_var = LabelVar(notif_status_label)
+
     monitor = ctx.register_process(ManagedProcess(
         root=root,
         launch_cmd=lambda: ctx.get_launch_cmd(['--notificaciones']),
     )).bind(notif_status_var, on_change=lambda running: (
-        btn_nf_iniciar.config(state=tk.DISABLED if running else tk.NORMAL),
-        btn_nf_detener.config(state=tk.NORMAL if running else tk.DISABLED),
+        btn_nf_iniciar.setEnabled(not running),
+        btn_nf_detener.setEnabled(running),
     ))
 
     def nf_iniciar():
@@ -124,15 +130,28 @@ def build(notebook, ctx):
         monitor.stop()
         messagebox.showinfo("Notificaciones", "Monitor detenido.")
 
-    nf_btn_row = ttk.Frame(nf_control_frame)
-    nf_btn_row.pack(fill="x")
+    btn_nf_iniciar = PrimaryPushButton(FluentIcon.PLAY, "Iniciar Monitor")
+    btn_nf_iniciar.clicked.connect(nf_iniciar)
 
-    btn_nf_iniciar = ttk.Button(nf_btn_row, text="▶  Iniciar Monitor", command=nf_iniciar, style="Accent.TButton")
-    btn_nf_iniciar.pack(side="left", padx=3)
+    btn_nf_detener = PushButton(FluentIcon.PAUSE, "Detener Monitor")
+    btn_nf_detener.setEnabled(False)
+    btn_nf_detener.clicked.connect(nf_detener)
 
-    btn_nf_detener = ttk.Button(nf_btn_row, text="⏹  Detener Monitor", command=nf_detener, state="disabled")
-    btn_nf_detener.pack(side="left", padx=3)
+    btn_ver_log = crear_visor_log(base_dir / "notificaciones_bitrix.log", root)
 
-    ttk.Label(nf_btn_row, textvariable=notif_status_var, foreground=ACCENT, font=("Segoe UI", 10, "bold")).pack(side="left", padx=15)
+    fila_botones = QHBoxLayout()
+    fila_botones.addWidget(btn_nf_iniciar)
+    fila_botones.addWidget(btn_nf_detener)
+    fila_botones.addSpacing(10)
+    fila_botones.addWidget(notif_status_label)
+    fila_botones.addStretch(1)
+    fila_botones.addWidget(btn_ver_log)
+    fila_botones_widget = QWidget()
+    fila_botones_widget.setLayout(fila_botones)
 
-    crear_visor_log(nf_btn_row, nf_control_frame, base_dir / "notificaciones_bitrix.log", root).pack(side="right", padx=3)
+    monitor_content = columna(fila_botones_widget, btn_ver_log.panel, margins=(24, 16, 24, 20))
+    control_card.viewLayout.addWidget(monitor_content)
+    layout.addWidget(control_card)
+
+    layout.addStretch(1)
+    return page
