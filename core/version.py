@@ -5,4 +5,4 @@ Se incrementa sola cada vez que se publica una actualización -ver
 incrementar_version() en publicar_actualizacion.py-, no hace falta
 tocarla a mano.
 """
-VERSION = "2.8"
+VERSION = "2.9"
