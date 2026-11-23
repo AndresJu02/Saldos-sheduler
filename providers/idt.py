@@ -217,16 +217,35 @@ class IDTProvider(BaseProvider):
                     pass
                 return recargo
 
+            def _hay_saldo_en_pantalla(espera=3):
+                """True si la pantalla del saldo ya está cargada."""
+                try:
+                    WebDriverWait(driver, espera).until(
+                        EC.presence_of_element_located(
+                            (By.XPATH, "//div[contains(text(), 'Account Balance:')]")
+                        )
+                    )
+                    return True
+                except TimeoutException:
+                    return False
+
             def _enviar_usuario():
                 """Completa y manda el campo de usuario -soporta las dos
-                variantes de nombre que usa IDT según la pantalla-."""
+                variantes de nombre que usa IDT según la pantalla-. Devuelve
+                True si se pudo enviar. Antes no devolvía nada y los fallos
+                se perdían: si el campo no aparecía, el flujo seguía como si
+                el usuario se hubiera enviado bien."""
                 try:
-                    user_input = wait.until(EC.presence_of_element_located((By.NAME, "user[login]")))
+                    user_input = WebDriverWait(driver, 15).until(
+                        EC.presence_of_element_located((By.NAME, "user[login]"))
+                    )
                 except TimeoutException:
                     try:
-                        user_input = wait.until(EC.presence_of_element_located((By.NAME, "username")))
+                        user_input = WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.NAME, "username"))
+                        )
                     except Exception:
-                        return
+                        return False
                 try:
                     user_input.clear()
                     user_input.send_keys(config["usuario"])
@@ -235,8 +254,96 @@ class IDTProvider(BaseProvider):
                     except Exception:
                         pass
                     time.sleep(0.6)
+                    return True
                 except Exception:
-                    pass
+                    return False
+
+            def _intentar_login():
+                """Una pasada completa de login (usuario -> contraseña ->
+                preguntas de seguridad). Devuelve (True, "") si terminó en
+                la pantalla del saldo, o (False, motivo) explicando dónde
+                se cortó.
+
+                Antes todo esto estaba en línea y cada paso estaba envuelto
+                en `except: pass`, así que un login a medias no se notaba:
+                el flujo caía igual en la espera del saldo, se quedaba ahí
+                los 40 segundos y terminaba devolviendo el mensaje vacío de
+                un TimeoutException -el "fallo" ilegible que se veía en el
+                log-. Ahora cada paso que no se puede completar corta de
+                una con su motivo."""
+                if not _enviar_usuario():
+                    if _hay_saldo_en_pantalla(espera=3):
+                        return True, ""
+                    return False, "no apareció el campo de usuario"
+
+                # El challenge anti-bot (validate.perfdrive.com) puede
+                # aparecer justo acá, apenas se manda el usuario. Si tocó
+                # recargar la URL base, la pantalla vuelve a pedir el
+                # usuario desde cero -hay que reenviarlo-.
+                if _manejar_challenge_anti_bot():
+                    if _hay_saldo_en_pantalla(espera=3):
+                        return True, ""
+                    if not _enviar_usuario():
+                        return False, ("no apareció el campo de usuario tras recargar por el "
+                                       "challenge anti-bot")
+
+                # --- Password ---
+                pwd_input = None
+                try:
+                    pwd_input = WebDriverWait(driver, 15).until(
+                        EC.presence_of_element_located((By.NAME, "user[password]"))
+                    )
+                except Exception:
+                    try:
+                        pwd_input = WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.NAME, "password"))
+                        )
+                    except Exception:
+                        pwd_input = None
+
+                if pwd_input is None:
+                    # Acá estaba el agujero: un `if pwd_input:` sin `else`.
+                    # Si el campo no aparecía, la contraseña simplemente no
+                    # se escribía y nadie se enteraba.
+                    if _hay_saldo_en_pantalla(espera=3):
+                        return True, ""
+                    return False, "no apareció el campo de contraseña"
+
+                try:
+                    pwd_input.clear()
+                    _escribir_lento(pwd_input, config["password"], duracion_seg=6.0)
+                    try:
+                        driver.find_element(By.NAME, "commit").click()
+                    except Exception:
+                        pwd_input.send_keys(Keys.ENTER)
+                    time.sleep(0.8)
+                except Exception as e:
+                    if _hay_saldo_en_pantalla(espera=3):
+                        return True, ""
+                    return False, f"no se pudo enviar la contraseña ({type(e).__name__})"
+
+                # El challenge anti-bot también puede aparecer acá, justo
+                # después de enviar la contraseña.
+                _manejar_challenge_anti_bot()
+
+                # --- Preguntas de seguridad ---
+                try:
+                    filled = self._handle_security_questions(
+                        driver,
+                        config.get("pet_answer", "Yankee"),
+                        config.get("author_answer", "Eckhart Tollee")
+                    )
+                    if filled:
+                        print(f"IDT - Se llenaron {filled} preguntas de seguridad automáticamente.",
+                              flush=True)
+                    time.sleep(0.8)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+
+                if _hay_saldo_en_pantalla(espera=25):
+                    return True, ""
+                return False, "el login no llegó a la pantalla del saldo"
 
             if _es_pagina_no_encontrada(espera=3) or not _pagina_cargo_bien(espera=6):
                 # El challenge anti-bot de IDT (Radware/ShieldSquare,
@@ -269,70 +376,59 @@ class IDTProvider(BaseProvider):
                 ya_logueado = False
 
             if not ya_logueado:
-                # --- Login usuario ---
-                _enviar_usuario()
-
-                # El challenge anti-bot (validate.perfdrive.com) puede
-                # aparecer justo acá, apenas se manda el usuario. Si tocó
-                # recargar la URL base, la pantalla vuelve a pedir el
-                # usuario desde cero -hay que reenviarlo-.
-                if _manejar_challenge_anti_bot():
-                    _enviar_usuario()
-
-                # --- Password ---
-                pwd_input = None
-                try:
-                    pwd_input = wait.until(EC.presence_of_element_located((By.NAME, "user[password]")))
-                except Exception:
-                    try:
-                        pwd_input = wait.until(EC.presence_of_element_located((By.NAME, "password")))
-                    except Exception:
-                        pass
-
-                if pwd_input:
-                    try:
-                        pwd_input.clear()
-                        _escribir_lento(pwd_input, config["password"], duracion_seg=6.0)
+                # Dos pasadas de login DENTRO del mismo navegador. La
+                # primera suele ser la que se come el challenge anti-bot;
+                # al resolverse queda guardada la cookie de verificación en
+                # el perfil persistente, así que la segunda pasada entra
+                # limpia. Antes esto no existía: la corrida se daba por
+                # fallada y era el reintento completo de core/balance.py
+                # (navegador nuevo y todo) el que acababa leyendo el saldo
+                # -de ahí el "intento 1 falló" seguido de un OK-.
+                MAX_PASADAS_LOGIN = 2
+                ok_login, motivo = False, ""
+                for pasada in range(1, MAX_PASADAS_LOGIN + 1):
+                    ok_login, motivo = _intentar_login()
+                    if ok_login:
+                        break
+                    if pasada < MAX_PASADAS_LOGIN:
+                        print(f"IDT - el login no se completó ({motivo}); "
+                              f"recargando y reintentando en la misma ventana...", flush=True)
                         try:
-                            driver.find_element(By.NAME, "commit").click()
+                            driver.get(TARGET_URL)
                         except Exception:
-                            pwd_input.send_keys(Keys.ENTER)
-                        time.sleep(0.8)
+                            pass
+                        _pagina_cargo_bien(espera=15)
+
+                if not ok_login:
+                    try:
+                        self.save_debug_snapshot(driver, "login_incompleto")
                     except Exception:
                         pass
-
-                # El challenge anti-bot también puede aparecer acá, justo
-                # después de enviar la contraseña. Si ya estamos logueados
-                # (la recarga trajo el saldo directo), lo de más abajo
-                # simplemente no encuentra preguntas de seguridad ni pisa
-                # nada -es inofensivo llamarlo igual-.
-                _manejar_challenge_anti_bot()
-
-            # --- Preguntas de seguridad (solo si tocó loguearse recién) ---
-            if not ya_logueado:
-                try:
-                    filled = self._handle_security_questions(
-                        driver,
-                        config.get("pet_answer", "Yankee"),
-                        config.get("author_answer", "Eckhart Tollee")
-                    )
-                    if filled:
-                        print(f"IDT - Se llenaron {filled} preguntas de seguridad automáticamente.", flush=True)
-                    time.sleep(0.8)
-                except Exception:
-                    import traceback
-                    traceback.print_exc()
+                    return False, f"login no completado: {motivo}"
 
             # --- Balance ---
+            # El `message=` es importante: sin él, un timeout acá devuelve
+            # un texto que empieza con "Message:" vacío y sigue con el
+            # volcado del chromedriver (20 líneas de "(No symbol)
+            # [0x7ff...]"), que es lo que aparecía en el log sin decir nada.
             raw = wait.until(
                 EC.presence_of_element_located(
                     (By.XPATH, "//div[contains(text(), 'Account Balance:')]/following-sibling::div//span")
-                )
+                ),
+                message="no apareció el monto del saldo junto a 'Account Balance:'",
             ).text.strip()
 
-            m = re.search(r"[-+]?\d[\d\.,]*", raw)
+            # No usamos [-+]?\d... porque IDT muestra los saldos negativos
+            # como "-$41.06" -el signo va pegado al "$", no al número-, y esa
+            # regex exige que el signo esté inmediatamente antes del dígito.
+            # Resultado: no matcheaba el "-" y el saldo se guardaba como
+            # positivo aunque la plataforma mostrara negativo. Por eso ahora
+            # buscamos el "-" en todo el texto que viene antes del número.
+            m = re.search(r"\d[\d\.,]*", raw)
             if m:
                 amt = float(m.group().replace(",", ""))
+                if "-" in raw[:m.start()]:
+                    amt = -amt
                 formatted = f"$ {amt:.2f} USD"
             else:
                 formatted = raw
@@ -346,6 +442,16 @@ class IDTProvider(BaseProvider):
                 self.save_debug_snapshot(driver, "excepcion")
             except Exception:
                 pass
-            return False, str(e)
+            # El nombre del tipo va adelante porque varias excepciones de
+            # Selenium -el TimeoutException entre ellas- traen el texto
+            # vacío: sin esto el motivo del fallo quedaba en blanco.
+            detalle = str(e).strip()
+            return False, f"{type(e).__name__}: {detalle}" if detalle else type(e).__name__
         finally:
-            driver.quit()
+            # Con try/except: una excepción al cerrar el navegador (driver
+            # ya muerto, Chrome colgado) reemplazaría el valor que devuelve
+            # get_balance, convirtiendo una lectura exitosa en un fallo.
+            try:
+                driver.quit()
+            except Exception:
+                pass

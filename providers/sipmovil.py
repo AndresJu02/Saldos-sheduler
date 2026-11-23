@@ -31,6 +31,14 @@ class MORSipMovilProvider(BaseProvider):
             run_site(driver, site_cfg, google_sheet, self.sheet_row)
             return True, "Saldo guardado"
         except Exception as e:
-            return False, str(e)
+            detalle = str(e).strip()
+            return False, f"{type(e).__name__}: {detalle}" if detalle else type(e).__name__
         finally:
-            driver.quit()
+            # Con try/except: si cerrar el navegador falla (Chrome colgado,
+            # driver ya muerto), esa excepcion reemplazaria el valor que
+            # devuelve get_balance y convertiria un saldo ya guardado en un
+            # fallo.
+            try:
+                driver.quit()
+            except Exception:
+                pass

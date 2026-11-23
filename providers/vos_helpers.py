@@ -1,6 +1,12 @@
 import time
 import re
 from selenium.webdriver.common.by import By
+# Keys se usa en el camino alternativo del combo "LoginType" de run_site
+# (cuando no se puede clickear el desplegable y hay que escribir la opción
+# a mano). Faltaba este import, así que ese camino -el de respaldo, el que
+# corre justo cuando algo ya salió mal- reventaba con
+# "NameError: name 'Keys' is not defined" en vez de hacer el respaldo.
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver import ActionChains
@@ -212,36 +218,155 @@ BALANCE_LOCATORS = [
     (By.XPATH, "//li[contains(normalize-space(.),'Account Balance')]"),
 ]
 
-# Variables para manejo de ventana
-WINDOW_ID = None
-WINDOW_SHOWN = False
+# --------------------------------------------------------------------------
+# Manejo de la ventana del navegador
+#
+# Estas funciones existen porque 1980 y SipMovil necesitan que el usuario
+# escriba a mano el código de verificación: la ventana se mantiene
+# minimizada mientras el robot llena el formulario y se trae al frente
+# recién cuando hace falta que una persona escriba.
+#
+# El windowId NO se guarda en una variable de módulo. Antes sí: se
+# cacheaba con el PRIMER navegador del proceso y nunca se limpiaba. Como
+# 1980 y SipMovil comparten este archivo y cada uno abre su propio Chrome
+# (ver el `driver.quit()` de cada proveedor), el SEGUNDO proveedor de la
+# corrida terminaba mandando los comandos CDP al windowId del navegador
+# del primero -ya cerrado-. Esas llamadas fallaban en silencio, se saltaba
+# el Page.bringToFront y el respaldo (driver.maximize_window) cambia el
+# tamaño pero NO trae la ventana al frente: la ventana del captcha quedaba
+# enterrada detrás de la consola y había que buscarla y abrirla a mano.
+# De ahí el síntoma que se reportó (2026-11-23): "el primero de la
+# secuencia se abre solo, el segundo no", sin importar cuál fuera cada
+# uno. La consulta del windowId es local y barata, así que se hace cada
+# vez y no se comparte nada entre navegadores.
+# --------------------------------------------------------------------------
 
 def _get_window_id(driver):
-    global WINDOW_ID
-    if WINDOW_ID is None:
+    """windowId del navegador que se le pasa, o None si no se pudo leer."""
+    try:
         info = driver.execute_cdp_cmd("Browser.getWindowForTarget", {})
-        WINDOW_ID = info.get("windowId")
-    return WINDOW_ID
+        return info.get("windowId")
+    except Exception:
+        return None
+
+def _set_window_state(driver, estado):
+    """Aplica un windowState de CDP ("minimized", "normal", "maximized").
+    Devuelve True si el comando se aceptó."""
+    wid = _get_window_id(driver)
+    if wid is None:
+        return False
+    try:
+        driver.execute_cdp_cmd(
+            "Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": estado}}
+        )
+        return True
+    except Exception:
+        return False
 
 def minimize_window(driver):
-    wid = _get_window_id(driver)
-    try:
-        driver.execute_cdp_cmd("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "minimized"}})
-    except Exception:
-        pass
+    _set_window_state(driver, "minimized")
 
 def show_window(driver):
-    global WINDOW_SHOWN
-    wid = _get_window_id(driver)
-    try:
-        driver.execute_cdp_cmd("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "maximized"}})
-        driver.execute_cdp_cmd("Page.bringToFront", {})
-    except Exception:
+    """Trae la ventana al frente para que el usuario pueda escribir el
+    código de verificación. Hace todos los intentos disponibles por
+    separado -no en un solo try- para que el fallo de uno no se salte los
+    demás, que es lo que dejaba la ventana escondida."""
+    # Restaurar antes de maximizar: Chrome ignora un "maximized" aplicado
+    # directamente sobre una ventana minimizada.
+    restaurada = _set_window_state(driver, "normal")
+    maximizada = _set_window_state(driver, "maximized")
+    if not (restaurada or maximizada):
+        # Sin CDP disponible, al menos el tamaño (no da foco, pero es
+        # mejor que nada).
         try:
             driver.maximize_window()
         except Exception:
             pass
-    WINDOW_SHOWN = True
+    # Esto es lo que realmente pone la ventana adelante, y por eso va
+    # aparte: antes vivía en el mismo try que setWindowBounds y se lo
+    # saltaba cada vez que ese comando fallaba.
+    try:
+        driver.execute_cdp_cmd("Page.bringToFront", {})
+    except Exception:
+        pass
+    try:
+        driver.switch_to.window(driver.current_window_handle)
+    except Exception:
+        pass
+
+
+# Cuánto se le da al usuario para escribir el código, y cuánto se espera
+# después -ya enviado- a que el panel termine de cargar y aparezca el
+# saldo. Son dos plazos distintos a propósito: ver el bucle de vigilancia
+# en run_site().
+ESPERA_USUARIO_SEG = 120
+ESPERA_PANEL_SEG = 60
+
+
+def _buscar_saldo(driver, timeout_each=1):
+    """Devuelve el elemento del saldo si ya está en pantalla, o None."""
+    for loc in BALANCE_LOCATORS:
+        try:
+            el, _ = find_in_iframes(driver, loc, timeout=timeout_each, clickable=False)
+            return el
+        except Exception:
+            continue
+    return None
+
+
+def _guardar_saldo(driver, saldo_el, sheet, sheet_row):
+    """Lee el saldo del elemento, lo formatea y lo escribe en la hoja."""
+    saldo_texto = driver.execute_script("return arguments[0].textContent;", saldo_el) or saldo_el.text
+    saldo_texto = (saldo_texto or "").strip()
+    saldo_num = parse_balance(saldo_texto)
+    saldo_fmt = format_cop_no_decimals(saldo_num)
+    if sheet is not None:
+        sheet.update_cell(sheet_row, 4, saldo_fmt)
+    print(f"Saldo guardado en D{sheet_row}: {saldo_fmt}", flush=True)
+
+
+def _buscar_campo_captcha(driver, timeout_each=8):
+    """Como first_of() sobre CAPTCHA_FIELD_LOCATORS, pero además devuelve
+    con qué locator y en qué iframe se encontró el campo, para poder
+    volver a mirarlo después sin ambigüedad (ver _estado_campo_captcha).
+    Devuelve (elemento, locator, indice_de_iframe)."""
+    last = None
+    for loc in CAPTCHA_FIELD_LOCATORS:
+        try:
+            el, idx = find_in_iframes(driver, loc, timeout_each, clickable=True)
+            return el, loc, idx
+        except Exception as e:
+            last = e
+    raise TimeoutException(f"No se halló el campo del código. Último error: {last}")
+
+
+def _estado_campo_captcha(driver, loc, frame_idx):
+    """(sigue_presente, texto_escrito) del campo del código.
+
+    El campo se vuelve a buscar en el mismo contexto donde se encontró, en
+    vez de preguntarle al WebElement que se guardó. Es a propósito: las
+    otras búsquedas de este archivo (el saldo, el popup de error) cambian
+    de iframe por el camino, y un WebElement consultado desde otro frame
+    lanza excepción aunque siga perfectamente vivo -lo que haría creer que
+    el código ya se envió cuando el usuario todavía no escribió nada-."""
+    switch_root(driver)
+    try:
+        if frame_idx is not None:
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+            if frame_idx >= len(frames):
+                return False, ""
+            driver.switch_to.frame(frames[frame_idx])
+        elementos = driver.find_elements(*loc)
+        if not elementos:
+            return False, ""
+        try:
+            return True, (elementos[0].get_attribute("value") or "").strip()
+        except Exception:
+            return True, ""
+    except Exception:
+        return False, ""
+    finally:
+        switch_root(driver)
 
 
 def run_site(driver, site_cfg, sheet, sheet_row):
@@ -253,13 +378,15 @@ def run_site(driver, site_cfg, sheet, sheet_row):
 
     driver.get(url)
 
-    # Comportamiento especial 1980/SIPMOVIL: mostrar/ocultar ventana
+    # Comportamiento especial 1980/SIPMOVIL: mostrar/ocultar ventana.
+    # Ya no hay ninguna variable de módulo que recuerde si la ventana está
+    # a la vista: antes era la global WINDOW_SHOWN, que quedaba en True del
+    # proveedor anterior y hacía que el bucle del captcha pudiera no llamar
+    # nunca a show_window(). Ahora el bucle la muestra siempre.
     try:
         show_window(driver)
         time.sleep(1.0)
         minimize_window(driver)
-        global WINDOW_SHOWN
-        WINDOW_SHOWN = False
     except Exception:
         pass
 
@@ -312,12 +439,46 @@ def run_site(driver, site_cfg, sheet, sheet_row):
 
     # Bucle de captcha
     for attempt in range(1, MAX_CAPTCHA_TRIES + 1):
+        # Antes de volver a pedir el código: ¿ya estamos adentro?
+        #
+        # Este chequeo es el que faltaba. Si el usuario alcanzó a enviar el
+        # código en el intento anterior pero el panel terminó de cargar
+        # DESPUÉS de que se agotara el plazo de vigilancia, el saldo ya
+        # está en pantalla y el login fue exitoso. Sin esto, el intento
+        # siguiente arrancaba buscando la casilla del código en una página
+        # que ya no la tiene, first_of() agotaba todos sus locators y el
+        # proveedor terminaba reportando "No se halló elemento ...
+        # input[name*='verify']" -un fallo por no encontrar el captcha en
+        # una pantalla donde el login YA había funcionado (reportado
+        # 2026-11-23)-.
+        saldo_el = _buscar_saldo(driver, timeout_each=1)
+        if saldo_el is not None:
+            _guardar_saldo(driver, saldo_el, sheet, sheet_row)
+            return
+
         refresh_captcha(driver)
 
-        if not WINDOW_SHOWN:
-            show_window(driver)
+        # Se trae la ventana al frente en CADA intento que necesite a una
+        # persona, no solo en el primero: si el intento anterior se agotó
+        # porque nadie estaba, lo que hace falta justamente es que la
+        # ventana vuelva a aparecer cuando se pide el código de nuevo.
+        show_window(driver)
 
-        captcha_input = first_of(driver, CAPTCHA_FIELD_LOCATORS, clickable=True)
+        try:
+            captcha_input, captcha_loc, captcha_frame = _buscar_campo_captcha(driver)
+        except Exception as e:
+            # No hay casilla de código. Puede ser que el login se haya
+            # completado justo ahora (se reintenta la búsqueda del saldo
+            # con más margen) o que la página esté en un estado inesperado.
+            saldo_el = _buscar_saldo(driver, timeout_each=3)
+            if saldo_el is not None:
+                _guardar_saldo(driver, saldo_el, sheet, sheet_row)
+                return
+            raise RuntimeError(
+                "no apareció la casilla del código de verificación ni el saldo en pantalla "
+                f"(la página no está en el login ni en el panel): {e}"
+            )
+
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", captcha_input)
         time.sleep(0.1)
         try:
@@ -338,35 +499,79 @@ def run_site(driver, site_cfg, sheet, sheet_row):
             })(arguments[0], arguments[1]);
         """, captcha_input, login_btn)
 
-        print(f"Escriba el código de verificación en la página y presione Enter (intento {attempt}/{MAX_CAPTCHA_TRIES}).")
+        print(f"Escriba el código de verificación en la página y presione Enter "
+              f"(intento {attempt}/{MAX_CAPTCHA_TRIES}; hay {ESPERA_USUARIO_SEG} segundos).", flush=True)
 
-        end = time.time() + 120
+        # Vigilancia del resultado. El plazo se maneja con una variable
+        # (`fin`) que se puede correr hacia adelante, en vez del límite
+        # fijo de antes:
+        #
+        #   - en cuanto se detecta que el código fue enviado, se cambia al
+        #     plazo de carga del panel. Antes no: el reloj arrancaba al
+        #     imprimir el mensaje y seguía corriendo igual, así que si el
+        #     usuario escribía el código cerca del final, el panel
+        #     terminaba de cargar cuando ya nadie estaba mirando y el saldo
+        #     -que sí estaba en pantalla- no se capturaba;
+        #   - si el usuario empieza a escribir, se le reinicia el plazo una
+        #     vez, para que volver al PC sobre la hora no signifique tener
+        #     diez segundos útiles.
+        fin = time.time() + ESPERA_USUARIO_SEG
         success = None
         saldo_el = None
-        while time.time() < end and success is None:
+        enviado = False
+        plazo_reiniciado = False
+
+        while success is None and time.time() < fin:
+            # 1) El saldo manda: si ya está en pantalla, el login salió bien.
+            saldo_el = _buscar_saldo(driver, timeout_each=1)
+            if saldo_el is not None:
+                success = True
+                break
+
+            # 2) Popup de "código incorrecto" -> este intento se perdió.
             if close_error_popup_if_present(driver, timeout=0.8):
-                print("Código incorrecto. Escríbalo nuevamente.")
+                print("Código incorrecto. Escríbalo nuevamente.", flush=True)
                 success = False
                 break
-            for loc in BALANCE_LOCATORS:
-                try:
-                    saldo_el, _ = find_in_iframes(driver, loc, timeout=1, clickable=False)
-                    success = True
-                    break
-                except Exception:
-                    pass
+
+            if not enviado:
+                presente, escrito = _estado_campo_captcha(driver, captcha_loc, captcha_frame)
+
+                # 3) ¿Ya se envió el código? El campo desaparece de la
+                #    página en cuanto esta cambia al panel.
+                if not presente:
+                    enviado = True
+                    fin = time.time() + ESPERA_PANEL_SEG
+                    print("Código recibido; esperando a que cargue el panel...", flush=True)
+
+                # 4) ¿Empezó a escribir? Se le devuelve el plazo completo
+                #    (una sola vez).
+                elif escrito and not plazo_reiniciado:
+                    plazo_reiniciado = True
+                    fin = max(fin, time.time() + ESPERA_USUARIO_SEG)
+
             time.sleep(0.25)
 
         if success is True and saldo_el is not None:
-            saldo_texto = driver.execute_script("return arguments[0].textContent;", saldo_el) or saldo_el.text
-            saldo_texto = (saldo_texto or "").strip()
-            saldo_num = parse_balance(saldo_texto)
-            saldo_fmt = format_cop_no_decimals(saldo_num)
-            if sheet is not None:
-                sheet.update_cell(sheet_row, 4, saldo_fmt)
-            print(f"Saldo guardado en D{sheet_row}: {saldo_fmt}")
+            _guardar_saldo(driver, saldo_el, sheet, sheet_row)
             return
-        else:
-            continue
 
-    raise RuntimeError("No fue posible iniciar sesión: excedidos los intentos de captcha.")
+        # Si el plazo se agotó con el código ya enviado, el login puede
+        # estar terminando justo ahora: el chequeo del saldo que abre el
+        # intento siguiente lo va a recoger.
+        if success is None:
+            motivo = ("el panel no cargó a tiempo" if enviado
+                      else "nadie escribió el código a tiempo")
+            print(f"Sin respuesta en este intento ({motivo}).", flush=True)
+
+    # Último chance antes de darse por vencido: el panel pudo haber
+    # cargado durante el último intento.
+    saldo_el = _buscar_saldo(driver, timeout_each=3)
+    if saldo_el is not None:
+        _guardar_saldo(driver, saldo_el, sheet, sheet_row)
+        return
+
+    raise RuntimeError(
+        f"No fue posible iniciar sesión: se agotaron los {MAX_CAPTCHA_TRIES} intentos de código "
+        "de verificación sin que se llegara a la pantalla del saldo."
+    )
